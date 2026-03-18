@@ -1,0 +1,36 @@
+# 環境變數（含 API Key，絕對不能上傳）
+.env
+.env.local
+backend/.env
+agent/.env
+frontend/.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Node.js
+node_modules/
+.next/
+out/
+npm-debug.log*
+
+# 資料庫 & 上傳檔案
+backend/data/
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp

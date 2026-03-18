@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: #6366f1;
+  --primary-dark: #4f46e5;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC",
+    "Microsoft JhengHei", sans-serif;
+}
+
+/* 捲軸樣式 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #1f2937; }
+::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+
+/* Markdown 樣式 */
+.markdown-body h1 { @apply text-2xl font-bold mb-3 text-white; }
+.markdown-body h2 { @apply text-xl font-semibold mb-2 text-white; }
+.markdown-body h3 { @apply text-lg font-medium mb-2 text-gray-200; }
+.markdown-body p  { @apply mb-3 text-gray-300 leading-relaxed; }
+.markdown-body ul { @apply list-disc list-inside mb-3 text-gray-300 space-y-1; }
+.markdown-body ol { @apply list-decimal list-inside mb-3 text-gray-300 space-y-1; }
+.markdown-body li { @apply ml-2; }
+.markdown-body code {
+  @apply bg-gray-800 text-indigo-300 px-1.5 py-0.5 rounded text-sm font-mono;
+}
+.markdown-body pre {
+  @apply bg-gray-900 border border-gray-700 rounded-lg p-4 mb-3 overflow-x-auto;
+}
+.markdown-body pre code { @apply bg-transparent px-0 py-0 text-gray-300; }
+.markdown-body strong { @apply text-white font-semibold; }
+.markdown-body blockquote {
+  @apply border-l-4 border-indigo-500 pl-4 italic text-gray-400 my-3;
+}
+.markdown-body table { @apply w-full mb-3 text-sm; }
+.markdown-body th { @apply bg-gray-800 text-gray-200 px-3 py-2 text-left font-medium; }
+.markdown-body td { @apply border-t border-gray-700 px-3 py-2 text-gray-300; }
+
+/* 載入動畫 */
+@keyframes pulse-dot {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+.typing-dot {
+  animation: pulse-dot 1.2s infinite ease-in-out;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }

@@ -1,0 +1,21 @@
+{
+  "name": "個人 AI 助理",
+  "short_name": "AI 助理",
+  "description": "全能個人 AI 助理",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#030712",
+  "theme_color": "#6366f1",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "shortcuts": [
+    {
+      "name": "指令中心",
+      "url": "/command",
+      "description": "向電腦發送 AI 指令"
+    }
+  ]
+}
