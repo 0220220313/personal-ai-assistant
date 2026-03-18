@@ -1,6 +1,14 @@
 "use client";
+/**
+ * AI 指令中心 - Agent 模式
+ * 已整合到聊天介面：用戶可直接在任意專案的聊天中使用工具按鈕發送指令。
+ * 此頁面保留作為全域指令監控中心（查看所有 Agent 執行歷史）。
+ */
 import { useEffect, useRef, useState } from "react";
-import { Send, Cpu, ArrowLeft, Clock, CheckCircle, XCircle, Loader } from "lucide-react";
+import {
+  Send, Cpu, ArrowLeft, Clock, CheckCircle, XCircle, Loader,
+  Info,
+} from "lucide-react";
 import Link from "next/link";
 import { agentApi, type AgentCommand } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
@@ -42,9 +50,11 @@ export default function CommandPage() {
       const data = JSON.parse(e.data);
       if (data.type === "agent_status") setAgentOnline(data.online);
       if (data.type === "command_result") {
-        setCommands(prev => prev.map(c =>
-          c.id === data.id ? { ...c, status: data.status, result: data.result } : c
-        ));
+        setCommands((prev) =>
+          prev.map((c) =>
+            c.id === data.id ? { ...c, status: data.status, result: data.result } : c
+          )
+        );
       }
     };
     wsRef.current = ws;
@@ -57,10 +67,17 @@ export default function CommandPage() {
     setInput("");
     try {
       const result = await agentApi.sendCommand(command);
-      setCommands(prev => [{
-        id: result.id, command, status: result.status,
-        result: "", created_at: new Date().toISOString(), updated_at: new Date().toISOString()
-      }, ...prev]);
+      setCommands((prev) => [
+        {
+          id: result.id,
+          command,
+          status: result.status,
+          result: "",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        ...prev,
+      ]);
     } finally {
       setSending(false);
     }
@@ -82,22 +99,39 @@ export default function CommandPage() {
         </Link>
         <Cpu size={18} className="text-indigo-400" />
         <h1 className="font-semibold text-white">AI 指令中心</h1>
-        <div className={`ml-auto flex items-center gap-1.5 px-3 py-1 rounded-full text-xs ${
-          agentOnline ? "bg-green-900/40 text-green-400" : "bg-gray-800 text-gray-500"
-        }`}>
+        <div
+          className={`ml-auto flex items-center gap-1.5 px-3 py-1 rounded-full text-xs ${
+            agentOnline ? "bg-green-900/40 text-green-400" : "bg-gray-800 text-gray-500"
+          }`}
+        >
           <div className={`w-1.5 h-1.5 rounded-full ${agentOnline ? "bg-green-400" : "bg-gray-500"}`} />
           {agentOnline ? "Agent 上線" : "Agent 離線"}
         </div>
       </header>
 
       <div className="flex-1 max-w-3xl mx-auto w-full p-4 flex flex-col gap-4">
+        {/* 整合提示 */}
+        <div className="flex items-start gap-3 bg-indigo-900/20 border border-indigo-700/30 rounded-xl px-4 py-3 text-sm text-indigo-300">
+          <Info size={16} className="shrink-0 mt-0.5 text-indigo-400" />
+          <div>
+            <p className="font-medium">Agent 模式已整合到聊天介面</p>
+            <p className="text-xs text-indigo-400 mt-1">
+              在任意專案的聊天頁面中，點擊「執行指令」快速按鈕，或直接告訴 AI 你想在電腦上執行什麼操作，
+              AI 會自動呼叫 Agent 工具。此頁面用於查看全域指令執行歷史。
+            </p>
+          </div>
+        </div>
+
         {/* 快速指令 */}
         <div>
           <p className="text-xs text-gray-500 mb-2">快速指令</p>
           <div className="flex flex-wrap gap-2">
-            {QUICK_COMMANDS.map(cmd => (
-              <button key={cmd} onClick={() => sendCommand(cmd)}
-                className="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 text-xs px-3 py-1.5 rounded-full transition-all">
+            {QUICK_COMMANDS.map((cmd) => (
+              <button
+                key={cmd}
+                onClick={() => sendCommand(cmd)}
+                className="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 text-xs px-3 py-1.5 rounded-full transition-all"
+              >
                 {cmd}
               </button>
             ))}
@@ -108,13 +142,16 @@ export default function CommandPage() {
         <div className="flex gap-2">
           <input
             value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && sendCommand()}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && sendCommand()}
             placeholder="輸入自然語言指令，例如：整理桌面 PDF 到「文件」資料夾..."
             className="flex-1 bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 transition-colors"
           />
-          <button onClick={() => sendCommand()} disabled={sending || !input.trim()}
-            className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white px-4 rounded-xl transition-colors">
+          <button
+            onClick={() => sendCommand()}
+            disabled={sending || !input.trim()}
+            className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white px-4 rounded-xl transition-colors"
+          >
             <Send size={16} />
           </button>
         </div>
@@ -126,31 +163,35 @@ export default function CommandPage() {
               <Cpu size={40} className="mx-auto mb-3 opacity-20" />
               <p>發送指令後，結果將在此顯示</p>
             </div>
-          ) : commands.map(cmd => (
-            <div key={cmd.id} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-              <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-800">
-                <StatusIcon status={cmd.status} />
-                <p className="text-sm text-white flex-1">{cmd.command}</p>
-                <span className="text-xs text-gray-500">
-                  {new Date(cmd.created_at).toLocaleTimeString("zh-TW")}
-                </span>
+          ) : (
+            commands.map((cmd) => (
+              <div key={cmd.id} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-800">
+                  <StatusIcon status={cmd.status} />
+                  <p className="text-sm text-white flex-1">{cmd.command}</p>
+                  <span className="text-xs text-gray-500">
+                    {new Date(cmd.created_at).toLocaleTimeString("zh-TW")}
+                  </span>
+                </div>
+                {cmd.result && (
+                  <div className="px-4 py-3">
+                    <div className="markdown-body text-xs text-gray-300">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{cmd.result}</ReactMarkdown>
+                    </div>
+                  </div>
+                )}
+                {(cmd.status === "pending" || cmd.status === "running") && !cmd.result && (
+                  <div className="px-4 py-3">
+                    <div className="flex gap-1">
+                      {[0, 1, 2].map((i) => (
+                        <div key={i} className="w-1.5 h-1.5 rounded-full bg-gray-600 typing-dot" />
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
-              {cmd.result && (
-                <div className="px-4 py-3">
-                  <div className="markdown-body text-xs text-gray-300">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{cmd.result}</ReactMarkdown>
-                  </div>
-                </div>
-              )}
-              {(cmd.status === "pending" || cmd.status === "running") && !cmd.result && (
-                <div className="px-4 py-3">
-                  <div className="flex gap-1">
-                    {[0,1,2].map(i => <div key={i} className="w-1.5 h-1.5 rounded-full bg-gray-600 typing-dot" />)}
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
+            ))
+          )}
         </div>
       </div>
     </div>

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from .database import Base
 import uuid
+from datetime import datetime
 
 def gen_uuid():
     return str(uuid.uuid4())
@@ -20,10 +21,11 @@ class Project(Base):
     created_at:  Mapped[str]  = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at:  Mapped[str]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
-    messages:    Mapped[list["Message"]]  = relationship("Message",  back_populates="project", cascade="all, delete-orphan")
-    files:       Mapped[list["File"]]     = relationship("File",     back_populates="project", cascade="all, delete-orphan")
-    tasks:       Mapped[list["Task"]]     = relationship("Task",     back_populates="project", cascade="all, delete-orphan")
-    reports:     Mapped[list["Report"]]   = relationship("Report",   back_populates="project", cascade="all, delete-orphan")
+    messages:    Mapped[list["Message"]]       = relationship("Message",       back_populates="project", cascade="all, delete-orphan")
+    files:       Mapped[list["File"]]          = relationship("File",          back_populates="project", cascade="all, delete-orphan")
+    tasks:       Mapped[list["Task"]]          = relationship("Task",          back_populates="project", cascade="all, delete-orphan")
+    reports:     Mapped[list["Report"]]        = relationship("Report",        back_populates="project", cascade="all, delete-orphan")
+    memories:    Mapped[list["ProjectMemory"]] = relationship("ProjectMemory", back_populates="project", cascade="all, delete-orphan")
 
 # ─── 對話訊息 ─────────────────────────────────────────
 class Message(Base):
@@ -106,3 +108,16 @@ class PushSubscription(Base):
     p256dh:       Mapped[str]  = mapped_column(Text)
     auth:         Mapped[str]  = mapped_column(Text)
     created_at:   Mapped[str]  = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+# ─── 專案記憶 ─────────────────────────────────────────
+class ProjectMemory(Base):
+    __tablename__ = "project_memories"
+
+    id:         Mapped[str]  = mapped_column(String, primary_key=True, default=gen_uuid)
+    project_id: Mapped[str]  = mapped_column(String, ForeignKey("projects.id", ondelete="CASCADE"))
+    key:        Mapped[str]  = mapped_column(String(200), nullable=False)   # 記憶的 key（如 "user_preference"）
+    value:      Mapped[str]  = mapped_column(Text, nullable=False)           # 記憶的內容
+    created_at: Mapped[str]  = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[str]  = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project: Mapped["Project"] = relationship("Project", back_populates="memories")

@@ -68,6 +68,15 @@ export const reportsApi = {
   delete:   (reportId: string) => api(`/api/reports/${reportId}`, { method: "DELETE" }),
 };
 
+// ── 專案記憶 ───────────────────────────────────────────
+export const memoryApi = {
+  list:   (projectId: string) => api<ProjectMemory[]>(`/api/projects/${projectId}/memory`),
+  upsert: (projectId: string, key: string, value: string) =>
+    api(`/api/projects/${projectId}/memory`, { method: "POST", body: JSON.stringify({ key, value }) }),
+  delete: (projectId: string, key: string) => api(`/api/projects/${projectId}/memory/${encodeURIComponent(key)}`, { method: "DELETE" }),
+  clear:  (projectId: string) => api(`/api/projects/${projectId}/memory`, { method: "DELETE" }),
+};
+
 // ── Agent 指令 ─────────────────────────────────────────
 export const agentApi = {
   sendCommand: (command: string) => api<AgentCommandResult>("/api/agent/command", { method: "POST", body: JSON.stringify({ command }) }),
@@ -108,3 +117,15 @@ export interface AgentCommand {
 export interface AgentCommandResult extends AgentCommand {
   agent_online: boolean;
 }
+export interface ProjectMemory {
+  id: string; key: string; value: string;
+  created_at: string; updated_at: string;
+}
+export interface SSETextEvent { type: "text"; content: string; }
+export interface SSEActionEvent {
+  type: "action";
+  action: "task_created" | "command_sent" | "memory_saved";
+  data: Record<string, unknown>;
+}
+export interface SSEDoneEvent { type: "done"; message_id: string; }
+export type SSEEvent = SSETextEvent | SSEActionEvent | SSEDoneEvent;
