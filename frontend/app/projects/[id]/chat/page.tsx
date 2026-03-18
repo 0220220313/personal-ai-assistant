@@ -24,7 +24,7 @@ function ActionCard({ action, data }: ActionCardProps) {
       <div className="inline-flex items-center gap-2 bg-green-900/40 border border-green-700/50 text-green-300 rounded-xl px-3 py-2 text-xs my-1">
         <CheckSquare size={13} className="shrink-0" />
         <span>已建立任務：<strong>{String(data.title)}</strong></span>
-        {data.status && (
+        {data.status != null && (
           <span className="bg-green-800/60 px-1.5 py-0.5 rounded text-green-400">{String(data.status)}</span>
         )}
       </div>

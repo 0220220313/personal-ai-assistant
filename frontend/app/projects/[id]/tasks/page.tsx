@@ -52,7 +52,7 @@ export default function TasksPage() {
     if (!aiText.trim()) return;
     setAiLoading(true);
     try {
-      const result = await tasksApi.aiGenerate(id, aiText);
+      const result = await tasksApi.aiGenerate(id, aiText) as { created: number };
       alert(`AI 已自動建立 ${result.created} 個任務`);
       setAiText("");
       setShowAI(false);
