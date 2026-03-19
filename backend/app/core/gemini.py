@@ -136,10 +136,9 @@ async def generate_text(
         return f"[Gemini 錯誤] {e}"
 
 # ── 上傳檔案 ──────────────────────────────────────────────
-async def upload_file_to_gemini(file_path: str, display_name: str = None):
+async def upload_file_to_gemini(file_path: str, mime_type: str = None, display_name: str = None):
     client = get_client()
-    mime, _ = mimetypes.guess_type(file_path)
-    mime = mime or "application/octet-stream"
+    mime = mime_type or mimetypes.guess_type(file_path)[0] or "application/octet-stream"
     try:
         file_obj = await asyncio.to_thread(
             client.files.upload,
