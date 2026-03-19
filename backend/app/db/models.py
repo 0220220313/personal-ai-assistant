@@ -53,6 +53,7 @@ class File(Base):
     gemini_file_uri: Mapped[str]  = mapped_column(Text, default="")   # Gemini File API URI
     summary:         Mapped[str]  = mapped_column(Text, default="")   # 自動摘要
     is_indexed:      Mapped[bool] = mapped_column(Boolean, default=False)  # 是否已加入知識庫
+    folder_path:     Mapped[str]  = mapped_column(String(500), default="/")  # 資料夾路徑
     created_at:      Mapped[str]  = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     project: Mapped["Project"] = relationship("Project", back_populates="files")

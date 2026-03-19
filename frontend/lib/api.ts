@@ -10,6 +10,7 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
     const err = await res.text();
     throw new Error(err || `HTTP ${res.status}`);
   }
+  if (res.status === 204) return undefined as T;
   return res.json();
 }
 
@@ -40,14 +41,22 @@ export async function streamChat(projectId: string, message: string, fileIds: st
 
 // ── 檔案 ──────────────────────────────────────────────
 export const filesApi = {
-  list:   (projectId: string) => api<File[]>(`/api/files/${projectId}`),
-  upload: async (projectId: string, file: globalThis.File) => {
+  list: (projectId: string, folder?: string) => {
+    const params = folder !== undefined ? `?folder=${encodeURIComponent(folder)}` : "";
+    return api<FileItem[]>(`/api/files/${projectId}${params}`);
+  },
+  getFolders: (projectId: string) =>
+    api<{ folders: string[] }>(`/api/files/${projectId}/folders`),
+  upload: async (projectId: string, file: globalThis.File, folder = "/") => {
     const form = new FormData();
     form.append("file", file);
+    form.append("folder", folder);
     const res = await fetch(`${BASE}/api/files/upload/${projectId}`, { method: "POST", body: form });
     if (!res.ok) throw new Error(await res.text());
-    return res.json();
+    return res.json() as Promise<FileItem>;
   },
+  moveFile: (fileId: string, folder: string) =>
+    api(`/api/files/${fileId}/move`, { method: "PATCH", body: JSON.stringify({ folder }) }),
   delete: (fileId: string) => api(`/api/files/${fileId}`, { method: "DELETE" }),
 };
 
@@ -95,10 +104,14 @@ export interface Message {
   id: string; role: "user" | "assistant" | "system";
   content: string; file_refs: string[]; created_at: string;
 }
-export interface File {
+export interface FileItem {
   id: string; original_name: string; file_type: string;
-  file_size: number; summary: string; is_indexed: boolean; created_at: string;
+  file_size: number; summary: string; is_indexed: boolean;
+  folder_path: string; created_at: string;
 }
+// Keep old name for compatibility
+export type File = FileItem;
+
 export interface Task {
   id: string; title: string; description: string;
   status: "todo" | "in_progress" | "done" | "archived";
