@@ -163,7 +163,13 @@ async def chat_stream(body: ChatRequest, db: AsyncSession = Depends(get_db)):
     kb = (await db.execute(
         select(File).where(File.project_id==body.project_id, File.is_indexed==True)
     )).scalars().all()
-    kb_text = "\n".join(f"- {f.original_name}" for f in kb) or "（尚無檔案）"
+    kb_parts = []
+    for f in kb:
+        part = f"- {f.original_name}"
+        if f.summary:
+            part += f"\n  摘要: {f.summary[:500]}"
+        kb_parts.append(part)
+    kb_text = "\n".join(kb_parts) or "（尚無檔案）"
 
     # 儲存用戶訊息
     user_msg = Message(project_id=body.project_id, role="user",
@@ -210,6 +216,12 @@ async def chat_stream(body: ChatRequest, db: AsyncSession = Depends(get_db)):
                         file_uri=fref.uri, mime_type=fref.mime_type)))
                 except Exception as e:
                     print(f"[Chat] 檔案載入失敗: {e}")
+                    # Fallback: use summary text
+                    if f.summary:
+                        last_parts.append(types.Part(text=f"[文件: {f.original_name}]\n{f.summary}"))
+            elif f.summary:
+                # No Gemini URI, use summary as text context
+                last_parts.append(types.Part(text=f"[文件: {f.original_name}]\n{f.summary}"))
 
     last_parts.append(types.Part(text=body.message))
     contents.append(types.Content(role="user", parts=last_parts))

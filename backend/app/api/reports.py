@@ -15,7 +15,7 @@ REPORT_TYPES = ["progress", "meeting", "risk", "weekly"]
 
 class ReportRequest(BaseModel):
     report_type: str
-    extra_context: str = ""   # 額外補充（如會議原始紀錄）
+    extra_context: str = ""
 
 @router.post("/{project_id}/generate")
 async def generate_report(
@@ -31,32 +31,32 @@ async def generate_report(
     if not project:
         raise HTTPException(status_code=404, detail="專案不存在")
 
-    # 彙整專案資訊作為上下文
     tasks_r = await db.execute(select(Task).where(Task.project_id == project_id))
     tasks = tasks_r.scalars().all()
 
-    task_summary = "\n".join([
-        f"- [{t.status.upper()}] {t.title} (優先級: {t.priority})"
-        for t in tasks
-    ])
+    msgs_r = await db.execute(
+        select(Message).where(Message.project_id == project_id)
+        .order_by(Message.created_at.desc()).limit(20)
+    )
+    messages = msgs_r.scalars().all()
 
-    context = f"""
-專案名稱：{project.name}
-專案描述：{project.description}
+    files_r = await db.execute(
+        select(File).where(File.project_id == project_id, File.is_indexed == True)
+    )
+    files = files_r.scalars().all()
 
-任務清單：
-{task_summary or '無任務'}
-
-{f'額外資訊：{body.extra_context}' if body.extra_context else ''}
-""".strip()
+    tasks_list = [{"title": t.title, "status": t.status, "priority": t.priority} for t in tasks]
+    msgs_list = [{"role": m.role, "content": m.content[:200]} for m in messages]
+    files_list = [{"name": f.original_name, "summary": (f.summary or "")[:200]} for f in files]
 
     content = await generate_project_report(
         project_name=project.name,
+        tasks=tasks_list,
+        messages=msgs_list,
+        files=files_list,
         report_type=body.report_type,
-        context=context
     )
 
-    # 儲存報告
     report = Report(
         project_id=project_id,
         title=f"{_report_name(body.report_type)} - {project.name}",
@@ -103,5 +103,5 @@ async def delete_report(report_id: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
     return {"success": True}
 
-def _report_name(t: str) -> str:
-    return {"progress": "進度報告", "meeting": "會議紀錄", "risk": "風險分析", "weekly": "週報"}.get(t, "報告")
+def _report_name(report_type: str) -> str:
+    return {"progress": "進度報告", "meeting": "會議記錄", "risk": "風險評估", "weekly": "週報"}.get(report_type, "報告")
