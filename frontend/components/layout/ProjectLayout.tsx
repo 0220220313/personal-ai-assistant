@@ -1,6 +1,5 @@
 "use client";
 import Link from "next/link";
-import { useParams, usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { MessageSquare, BookOpen, CheckSquare, FileBarChart, ArrowLeft, Presentation } from "lucide-react";
 import { projectsApi, type Project } from "@/lib/api";
@@ -28,7 +27,6 @@ export default function ProjectLayout({ projectId, activeTab, children }: Props)
 
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col">
-      {/* Header */}
       <header className="flex items-center gap-3 px-4 py-3 border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-10">
         <Link href="/" className="p-1.5 text-gray-500 hover:text-white hover:bg-gray-800 rounded-lg transition-colors">
           <ArrowLeft size={16} />
@@ -42,13 +40,16 @@ export default function ProjectLayout({ projectId, activeTab, children }: Props)
         </h1>
       </header>
 
-      {/* Tab navigation */}
       <nav className="flex border-b border-gray-800 bg-gray-900/40 px-3 overflow-x-auto">
         {TABS.map(({ key, label, icon: Icon }) => (
           <Link
             key={key}
-            href={}
-            className={}
+            href={`/projects/${projectId}/${key}`}
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-sm border-b-2 transition-colors whitespace-nowrap shrink-0 ${
+              activeTab === key
+                ? "border-indigo-500 text-white font-medium"
+                : "border-transparent text-gray-500 hover:text-gray-300 hover:border-gray-600"
+            }`}
           >
             <Icon size={14} />
             {label}
@@ -56,7 +57,6 @@ export default function ProjectLayout({ projectId, activeTab, children }: Props)
         ))}
       </nav>
 
-      {/* Content */}
       <main className="flex-1 overflow-hidden">{children}</main>
     </div>
   );
