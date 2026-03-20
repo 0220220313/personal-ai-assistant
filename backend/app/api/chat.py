@@ -5,6 +5,8 @@ SSE 格式:
   {"type":"action","action":"task_created","data":{...}}
   {"type":"action","action":"command_sent","data":{...}}
   {"type":"action","action":"memory_saved","data":{...}}
+  {"type":"action","action":"project_created","data":{...}}
+  {"type":"action","action":"slides_generated","data":{...}}
   {"type":"done","message_id":"..."}
 """
 from fastapi import APIRouter, Depends, HTTPException
@@ -78,6 +80,54 @@ def _make_tools():
             description="取得專案的所有記憶（可主動呼叫以取得背景資訊）",
             parameters=types.Schema(type=types.Type.OBJECT, properties={})
         ),
+        types.FunctionDeclaration(
+            name="create_project",
+            description="建立新的專案",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "name": types.Schema(type=types.Type.STRING, description="專案名稱"),
+                    "description": types.Schema(type=types.Type.STRING, description="專案描述（選填）"),
+                },
+                required=["name"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="list_projects",
+            description="列出所有專案",
+            parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+        ),
+        types.FunctionDeclaration(
+            name="list_tasks",
+            description="列出當前專案的所有任務",
+            parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+        ),
+        types.FunctionDeclaration(
+            name="update_task",
+            description="更新任務狀態或優先度",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "task_id": types.Schema(type=types.Type.STRING, description="任務 ID"),
+                    "status": types.Schema(type=types.Type.STRING, description="新狀態: todo/in_progress/done"),
+                    "priority": types.Schema(type=types.Type.STRING, description="優先度: high/medium/low"),
+                },
+                required=["task_id"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="generate_slides",
+            description="根據主題生成 PowerPoint 簡報",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "topic": types.Schema(type=types.Type.STRING, description="簡報主題"),
+                    "num_slides": types.Schema(type=types.Type.STRING, description="投影片數量（預設8）"),
+                    "template": types.Schema(type=types.Type.STRING, description="模板：professional/modern/minimal"),
+                },
+                required=["topic"],
+            ),
+        ),
     ])]
 
 # ── 執行工具 ──────────────────────────────────────────────
@@ -134,6 +184,81 @@ async def _exec_tool(name: str, args: dict, project_id: str, db: AsyncSession):
             select(ProjectMemory).where(ProjectMemory.project_id==project_id)
         )).scalars().all()
         return {"memories":{m.key:m.value for m in mems}}, None
+
+    elif name == "create_project":
+        from ..db.models import Project as ProjectModel
+        import uuid as _uuid
+        from ..db.database import AsyncSessionLocal
+        new_name = args.get("name", "新專案")
+        new_desc = args.get("description", "")
+        async with AsyncSessionLocal() as _db:
+            new_proj = ProjectModel(
+                id=str(_uuid.uuid4()),
+                name=new_name,
+                description=new_desc,
+                color="#6366f1",
+            )
+            _db.add(new_proj)
+            await _db.commit()
+        result = {"created": True, "name": new_name, "message": f"已建立專案「{new_name}」"}
+        event  = {"type":"action","action":"project_created","data":{"name":new_name}}
+        return result, event
+
+    elif name == "list_projects":
+        from ..db.database import AsyncSessionLocal
+        from ..db.models import Project as ProjectModel
+        from sqlalchemy import select as _select
+        async with AsyncSessionLocal() as _db:
+            res = await _db.execute(_select(ProjectModel).where(ProjectModel.is_archived == False))
+            projs = res.scalars().all()
+        return {"projects": [{"id": p.id, "name": p.name, "description": p.description} for p in projs]}, None
+
+    elif name == "list_tasks":
+        from ..db.database import AsyncSessionLocal
+        from ..db.models import Task as TaskModel
+        from sqlalchemy import select as _select
+        async with AsyncSessionLocal() as _db:
+            res = await _db.execute(_select(TaskModel).where(TaskModel.project_id == project_id))
+            task_list = res.scalars().all()
+        return {"tasks": [{"id": t.id, "title": t.title, "status": t.status, "priority": t.priority} for t in task_list]}, None
+
+    elif name == "update_task":
+        from ..db.database import AsyncSessionLocal
+        from ..db.models import Task as TaskModel
+        from sqlalchemy import select as _select
+        task_id = args.get("task_id", "")
+        async with AsyncSessionLocal() as _db:
+            res = await _db.execute(_select(TaskModel).where(TaskModel.id == task_id))
+            t = res.scalar_one_or_none()
+            if t:
+                if args.get("status"):
+                    t.status = args["status"]
+                if args.get("priority"):
+                    t.priority = args["priority"]
+                await _db.commit()
+                result = {"updated": True, "task_id": task_id, "title": t.title}
+            else:
+                result = {"updated": False, "error": "Task not found"}
+        return result, None
+
+    elif name == "generate_slides":
+        import httpx
+        topic = args.get("topic", "")
+        num = int(args.get("num_slides", 8))
+        tmpl = args.get("template", "professional")
+        async with httpx.AsyncClient() as hclient:
+            r = await hclient.post(
+                f"http://localhost:8000/api/slides/{project_id}/generate",
+                json={"topic": topic, "num_slides": num, "template": tmpl},
+                timeout=60,
+            )
+        if r.status_code == 200:
+            d = r.json()
+            result = {"generated": True, "title": d.get("title"), "slide_count": len(d.get("slides", [])), "pres_id": d.get("id"), "message": f"已生成簡報「{d.get('title')}」，共 {len(d.get('slides', []))} 張投影片，請前往「簡報」頁面查看"}
+            event  = {"type":"action","action":"slides_generated","data":{"title":d.get("title"),"pres_id":d.get("id"),"slide_count":len(d.get("slides",[]))}}
+            return result, event
+        else:
+            return {"generated": False, "error": r.text}, None
 
     return {"error":f"未知工具: {name}"}, None
 
@@ -192,6 +317,11 @@ async def chat_stream(body: ChatRequest, db: AsyncSession = Depends(get_db)):
 - send_agent_command：控制 Windows 電腦執行操作
 - save_memory：儲存重要資訊供未來對話使用
 - get_memories：查詢已儲存的記憶
+- create_project：建立新的專案
+- list_projects：列出所有專案
+- list_tasks：列出當前專案的所有任務
+- update_task：更新任務狀態或優先度
+- generate_slides：根據主題生成 PowerPoint 簡報
 
 請用繁體中文回答，適當使用 Markdown，引用文件時標明 [來源: 文件名]。"""
 
