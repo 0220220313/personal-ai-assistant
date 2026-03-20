@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, UploadFile, HTTPException, BackgroundTasks, Form, Body
+from fastapi import APIRouter, Depends, UploadFile, File as UploadFileType, HTTPException, BackgroundTasks, Form, Body
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-import os, aiofiles, uuid, mimetypes
+import os, aiofiles, uuid, mimetypes, asyncio, logging
 from typing import Optional
 
 from ..db.database import get_db
@@ -9,12 +10,15 @@ from ..db.models import File, Project
 from ..core.gemini import upload_file_to_gemini, generate_file_summary
 
 router = APIRouter(prefix="/files", tags=["files"])
+logger = logging.getLogger(__name__)
 
 UPLOAD_DIR = "./data/uploads"
 ALLOWED_TYPES = {
     "application/pdf": "pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "application/vnd.ms-powerpoint": "pptx",
     "text/plain": "txt",
     "text/markdown": "txt",
     "image/jpeg": "image",
@@ -27,99 +31,20 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 @router.get("/{project_id}/folders")
 async def list_folders(project_id: str, db: AsyncSession = Depends(get_db)):
-    """Return all unique folder paths in this project."""
     result = await db.execute(
         select(File.folder_path).where(File.project_id == project_id).distinct()
     )
     paths = sorted(set(row[0] or "/" for row in result.fetchall()))
-    # Ensure parent paths are included
-    all_folders = set(paths)
-    all_folders.add("/")
+    folders = list(paths)
     for path in paths:
         if path == "/":
             continue
         parts = path.rstrip("/").split("/")
         for i in range(1, len(parts)):
-            parent = "/" + "/".join(parts[1:i]) if i > 1 else "/"
-            all_folders.add(parent)
-    return {"folders": sorted(all_folders)}
-
-
-@router.post("/upload/{project_id}")
-async def upload_file(
-    project_id: str,
-    file: UploadFile,
-    background_tasks: BackgroundTasks,
-    folder: str = Form(default="/"),
-    db: AsyncSession = Depends(get_db),
-):
-    # 確認專案
-    proj = await db.execute(select(Project).where(Project.id == project_id))
-    if not proj.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="專案不存在")
-
-    # 驗證檔案類型
-    content_type = file.content_type or mimetypes.guess_type(file.filename or "")[0] or ""
-    # Accept markdown files
-    if file.filename and file.filename.endswith(".md"):
-        content_type = "text/plain"
-    file_type = ALLOWED_TYPES.get(content_type)
-    if not file_type:
-        raise HTTPException(status_code=400, detail=f"不支援的檔案類型: {content_type}")
-
-    # 儲存到本地
-    file_id = str(uuid.uuid4())
-    ext = os.path.splitext(file.filename or "")[1]
-    local_filename = f"{file_id}{ext}"
-    local_path = os.path.join(UPLOAD_DIR, local_filename)
-
-    content = await file.read()
-    async with aiofiles.open(local_path, "wb") as f:
-        await f.write(content)
-
-    # 建立資料庫記錄
-    db_file = File(
-        id=file_id,
-        project_id=project_id,
-        filename=local_filename,
-        original_name=file.filename or local_filename,
-        file_type=file_type,
-        file_size=len(content),
-        folder_path=folder or "/",
-    )
-    db.add(db_file)
-    await db.commit()
-
-    # 背景任務：上傳到 Gemini + 生成摘要
-    background_tasks.add_task(
-        _process_file_background, file_id, local_path, content_type, file.filename or local_filename
-    )
-
-    return {
-        "id": file_id,
-        "original_name": file.filename,
-        "file_type": file_type,
-        "file_size": len(content),
-        "is_indexed": False,
-        "folder_path": folder or "/",
-        "created_at": str(db_file.created_at),
-        "status": "processing",
-    }
-
-
-@router.patch("/{file_id}/move")
-async def move_file(
-    file_id: str,
-    folder: str = Body(..., embed=True),
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(select(File).where(File.id == file_id))
-    f = result.scalar_one_or_none()
-    if not f:
-        raise HTTPException(status_code=404, detail="檔案不存在")
-    f.folder_path = folder or "/"
-    await db.commit()
-    return {"id": file_id, "folder_path": f.folder_path}
+            parent = "/".join(parts[:i]) or "/"
+            if parent not in folders:
+                folders.append(parent)
+    return {"folders": sorted(set(folders))}
 
 
 @router.get("/{project_id}")
@@ -128,6 +53,11 @@ async def list_files(
     folder: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
     query = select(File).where(File.project_id == project_id)
     if folder is not None:
         query = query.where(File.folder_path == folder)
@@ -144,10 +74,91 @@ async def list_files(
             "summary": f.summary,
             "is_indexed": f.is_indexed,
             "folder_path": f.folder_path or "/",
-            "created_at": str(f.created_at),
+            "created_at": f.created_at.isoformat(),
         }
         for f in files
     ]
+
+
+@router.post("/upload/{project_id}")
+async def upload_file(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    file: UploadFileType = UploadFileType(...),
+    folder: str = Form(default="/"),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    content_type = file.content_type or mimetypes.guess_type(file.filename or "")[0] or ""
+    fname = file.filename or ""
+    if fname.endswith(".md"):
+        content_type = "text/plain"
+    elif fname.endswith(".pptx"):
+        content_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    elif fname.endswith(".ppt"):
+        content_type = "application/vnd.ms-powerpoint"
+
+    if content_type not in ALLOWED_TYPES:
+        raise HTTPException(400, f"Unsupported file type: {content_type}")
+
+    file_id = str(uuid.uuid4())
+    ext = os.path.splitext(fname)[1]
+    filename = f"{file_id}{ext}"
+    local_path = os.path.join(UPLOAD_DIR, filename)
+
+    content = await file.read()
+    async with aiofiles.open(local_path, "wb") as f:
+        await f.write(content)
+
+    db_file = File(
+        id=file_id,
+        project_id=project_id,
+        filename=filename,
+        original_name=fname or filename,
+        file_type=ALLOWED_TYPES.get(content_type, "unknown"),
+        file_size=len(content),
+        folder_path=folder or "/",
+        is_indexed=False,
+    )
+    db.add(db_file)
+    await db.commit()
+
+    background_tasks.add_task(
+        _process_file_background,
+        file_id,
+        local_path,
+        content_type,
+        fname or filename,
+    )
+
+    return {
+        "id": file_id,
+        "original_name": fname,
+        "file_type": ALLOWED_TYPES.get(content_type, "unknown"),
+        "file_size": len(content),
+        "is_indexed": False,
+        "folder_path": folder or "/",
+        "created_at": db_file.created_at.isoformat(),
+    }
+
+
+@router.patch("/{file_id}/move")
+async def move_file(
+    file_id: str,
+    folder: str = Body(..., embed=True),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(File).where(File.id == file_id))
+    f = result.scalar_one_or_none()
+    if not f:
+        raise HTTPException(404, "File not found")
+    f.folder_path = folder or "/"
+    await db.commit()
+    return {"id": file_id, "folder_path": f.folder_path}
 
 
 @router.delete("/{file_id}")
@@ -155,121 +166,111 @@ async def delete_file(file_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(File).where(File.id == file_id))
     f = result.scalar_one_or_none()
     if not f:
-        raise HTTPException(status_code=404, detail="檔案不存在")
+        raise HTTPException(404, "File not found")
 
-    # 刪除本地檔案
     local_path = os.path.join(UPLOAD_DIR, f.filename)
     if os.path.exists(local_path):
         os.remove(local_path)
 
     await db.delete(f)
     await db.commit()
-    return {"success": True}
+    return {"ok": True}
 
 
-async def _process_file_background(
-    file_id: str, local_path: str, mime_type: str, display_name: str
-):
-    """背景：上傳 Gemini + 生成摘要（含 fallback 到本地文字讀取）"""
+async def _process_file_background(file_id: str, local_path: str, mime_type: str, display_name: str):
     from ..db.database import AsyncSessionLocal
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as db:
         try:
+            result = await db.execute(select(File).where(File.id == file_id))
+            f = result.scalar_one_or_none()
+            if not f:
+                return
+
             gemini_uri = None
-            file_part = None
-
-            # 嘗試上傳到 Gemini File API
-            try:
-                result = await upload_file_to_gemini(local_path, mime_type, display_name)
-                gemini_uri = result["uri"]
-                file_part = {"file_data": {"mime_type": mime_type, "file_uri": gemini_uri}}
-                print(f"[File Processing] {file_id}: Gemini URI = {gemini_uri}")
-            except Exception as gemini_err:
-                print(f"[File Processing] {file_id}: Gemini upload failed: {gemini_err}, falling back to local read")
-
-            # Fallback：本地讀取文字內容
-            if file_part is None:
-                local_text = _read_local_text(local_path, mime_type)
-                if local_text:
-                    file_part = {"text_content": local_text}
-                    print(f"[File Processing] {file_id}: Using local text fallback ({len(local_text)} chars)")
-
-            # 生成摘要
             summary = ""
-            if file_part:
-                try:
-                    if "file_data" in file_part:
-                        summary = await generate_file_summary(file_part, display_name)
-                    elif "text_content" in file_part:
-                        summary = await generate_file_summary_from_text(
-                            file_part["text_content"], display_name
-                        )
-                except Exception as summary_err:
-                    print(f"[File Processing] {file_id}: Summary generation failed: {summary_err}")
-                    summary = f"（無法自動生成摘要：{summary_err}）"
 
-            # 更新資料庫
-            r = await session.execute(select(File).where(File.id == file_id))
-            db_file = r.scalar_one_or_none()
-            if db_file:
+            try:
+                gemini_uri = await upload_file_to_gemini(local_path, mime_type, display_name)
+                logger.info(f"Gemini upload OK: {gemini_uri}")
+            except Exception as e:
+                logger.warning(f"Gemini upload failed: {e}")
+
+            try:
                 if gemini_uri:
-                    db_file.gemini_file_uri = gemini_uri
-                db_file.summary = summary
-                db_file.is_indexed = True
-                await session.commit()
-                print(f"[File Processing] {file_id}: Done (indexed={db_file.is_indexed})")
+                    summary = await generate_file_summary(gemini_uri, display_name)
+                else:
+                    summary = await _generate_summary_from_local(local_path, mime_type, display_name)
+            except Exception as e:
+                logger.warning(f"Summary generation failed: {e}")
+                summary = f"檔案 {display_name} 已上傳，摘要生成失敗。"
+
+            f.gemini_file_uri = gemini_uri
+            f.summary = summary
+            f.is_indexed = True
+            await db.commit()
+            logger.info(f"File {file_id} indexed OK")
+
         except Exception as e:
-            print(f"[File Processing Error] {file_id}: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Background processing error: {e}")
+            try:
+                result = await db.execute(select(File).where(File.id == file_id))
+                f = result.scalar_one_or_none()
+                if f:
+                    f.summary = "處理失敗，請重新上傳"
+                    f.is_indexed = True
+                    await db.commit()
+            except Exception:
+                pass
 
 
-def _read_local_text(local_path: str, mime_type: str) -> str:
-    """嘗試從本地檔案讀取文字內容（支援 txt、嘗試 PDF）"""
+async def _generate_summary_from_local(local_path: str, mime_type: str, display_name: str) -> str:
+    from ..core.gemini import generate_text
+    text = ""
     try:
-        if mime_type == "text/plain":
-            with open(local_path, "r", encoding="utf-8", errors="ignore") as f:
-                return f.read()[:50000]
-
         if mime_type == "application/pdf":
             try:
+                import pdfplumber
+                with pdfplumber.open(local_path) as pdf:
+                    text = "\n".join(p.extract_text() or "" for p in pdf.pages[:5])
+            except ImportError:
                 import PyPDF2
                 with open(local_path, "rb") as f:
                     reader = PyPDF2.PdfReader(f)
-                    text = "\n".join(
-                        page.extract_text() or "" for page in reader.pages
-                    )
-                    return text[:50000]
-            except ImportError:
-                pass
-            except Exception as pdf_err:
-                print(f"[PDF Read] {local_path}: {pdf_err}")
-
-        if "wordprocessingml" in mime_type:
-            try:
-                import docx
-                doc = docx.Document(local_path)
-                text = "\n".join(p.text for p in doc.paragraphs)
-                return text[:50000]
-            except ImportError:
-                pass
-            except Exception as docx_err:
-                print(f"[DOCX Read] {local_path}: {docx_err}")
-
+                    text = "\n".join(page.extract_text() or "" for page in reader.pages[:5])
+        elif "wordprocessingml" in mime_type:
+            from docx import Document
+            doc = Document(local_path)
+            text = "\n".join(p.text for p in doc.paragraphs[:50])
+        elif "spreadsheetml" in mime_type:
+            import openpyxl
+            wb = openpyxl.load_workbook(local_path, read_only=True, data_only=True)
+            rows = []
+            for ws in list(wb.worksheets)[:2]:
+                for row in list(ws.iter_rows(values_only=True))[:20]:
+                    rows.append("\t".join(str(c) if c is not None else "" for c in row))
+            text = "\n".join(rows)
+        elif "presentationml" in mime_type or "powerpoint" in mime_type:
+            from pptx import Presentation
+            prs = Presentation(local_path)
+            slides_text = []
+            for i, slide in enumerate(prs.slides[:15]):
+                slide_parts = []
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text.strip():
+                        slide_parts.append(shape.text.strip())
+                if slide_parts:
+                    slides_text.append(f"第{i+1}頁: " + " | ".join(slide_parts))
+            text = "\n".join(slides_text)
+        elif mime_type in ("text/plain", "text/markdown"):
+            async with aiofiles.open(local_path, "r", encoding="utf-8", errors="ignore") as f:
+                text = await f.read()
+            text = text[:4000]
     except Exception as e:
-        print(f"[Local Text Read] {local_path}: {e}")
-    return ""
+        logger.warning(f"Local extraction failed for {display_name}: {e}")
+        return f"檔案 {display_name} 已上傳至知識庫。"
 
+    if not text.strip():
+        return f"檔案 {display_name} 內容為空或無法讀取。"
 
-async def generate_file_summary_from_text(text_content: str, filename: str) -> str:
-    """使用文字內容（而非 Gemini File API）生成摘要"""
-    from ..core.gemini import generate_text
-    prompt = f"""請分析以下文件「{filename}」的內容並生成：
-1. **文件摘要**（3-5句話）
-2. **主要重點**（條列式，最多8點）
-3. **關鍵詞**（5-10個）
-
-文件內容：
-{text_content[:30000]}
-
-請用繁體中文回答，格式使用 Markdown。"""
+    prompt = f"請用繁體中文為以下文件內容生成摘要（200字以內），說明主要內容與重點：\n\n{text[:3000]}"
     return await generate_text(prompt)
