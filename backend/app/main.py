@@ -8,7 +8,7 @@ load_dotenv()
 
 from .db.database import init_db
 from .core.gemini import init_gemini
-from .api import projects, chat, files, tasks, reports, agent, memory, remote
+from .api import projects, chat, files, tasks, reports, agent, memory, remote, slides
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -36,6 +36,7 @@ app.include_router(reports.router,  prefix="/api")
 app.include_router(agent.router,    prefix="/api")
 app.include_router(memory.router,   prefix="/api")
 app.include_router(remote.router,   prefix="/api")
+app.include_router(slides.router,   prefix="/api")
 
 @app.get("/")
 async def root():
