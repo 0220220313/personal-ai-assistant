@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, UploadFile, File as FastAPIFile, HTTPException, BackgroundTasks, Form, Body
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, BackgroundTasks, Form, Body
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -84,7 +84,7 @@ async def list_files(
 async def upload_file(
     project_id: str,
     background_tasks: BackgroundTasks,
-    file: UploadFile = FastAPIFile(...),
+    file: UploadFile = File(...),
     folder: str = Form(default="/"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -94,19 +94,15 @@ async def upload_file(
         raise HTTPException(404, "Project not found")
 
     content_type = file.content_type or mimetypes.guess_type(file.filename or "")[0] or ""
-    fname = file.filename or ""
-    if fname.endswith(".md"):
+    if file.filename and (file.filename.endswith(".md") or file.filename.endswith(".txt")):
         content_type = "text/plain"
-    elif fname.endswith(".pptx"):
+    if file.filename and file.filename.endswith(".pptx"):
         content_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-    elif fname.endswith(".ppt"):
-        content_type = "application/vnd.ms-powerpoint"
-
     if content_type not in ALLOWED_TYPES:
         raise HTTPException(400, f"Unsupported file type: {content_type}")
 
     file_id = str(uuid.uuid4())
-    ext = os.path.splitext(fname)[1]
+    ext = os.path.splitext(file.filename or "")[1]
     filename = f"{file_id}{ext}"
     local_path = os.path.join(UPLOAD_DIR, filename)
 
@@ -118,7 +114,7 @@ async def upload_file(
         id=file_id,
         project_id=project_id,
         filename=filename,
-        original_name=fname or filename,
+        original_name=file.filename or filename,
         file_type=ALLOWED_TYPES.get(content_type, "unknown"),
         file_size=len(content),
         folder_path=folder or "/",
@@ -132,12 +128,12 @@ async def upload_file(
         file_id,
         local_path,
         content_type,
-        fname or filename,
+        file.filename or filename,
     )
 
     return {
         "id": file_id,
-        "original_name": fname,
+        "original_name": file.filename,
         "file_type": ALLOWED_TYPES.get(content_type, "unknown"),
         "file_size": len(content),
         "is_indexed": False,
@@ -167,11 +163,9 @@ async def delete_file(file_id: str, db: AsyncSession = Depends(get_db)):
     f = result.scalar_one_or_none()
     if not f:
         raise HTTPException(404, "File not found")
-
     local_path = os.path.join(UPLOAD_DIR, f.filename)
     if os.path.exists(local_path):
         os.remove(local_path)
-
     await db.delete(f)
     await db.commit()
     return {"ok": True}
@@ -191,7 +185,6 @@ async def _process_file_background(file_id: str, local_path: str, mime_type: str
 
             try:
                 gemini_uri = await upload_file_to_gemini(local_path, mime_type, display_name)
-                logger.info(f"Gemini upload OK: {gemini_uri}")
             except Exception as e:
                 logger.warning(f"Gemini upload failed: {e}")
 
@@ -201,14 +194,13 @@ async def _process_file_background(file_id: str, local_path: str, mime_type: str
                 else:
                     summary = await _generate_summary_from_local(local_path, mime_type, display_name)
             except Exception as e:
-                logger.warning(f"Summary generation failed: {e}")
-                summary = f"檔案 {display_name} 已上傳，摘要生成失敗。"
+                logger.warning(f"Summary failed: {e}")
+                summary = f"\u6a94\u6848 {display_name} \u5df2\u4e0a\u50b3\u3002"
 
             f.gemini_file_uri = gemini_uri
             f.summary = summary
             f.is_indexed = True
             await db.commit()
-            logger.info(f"File {file_id} indexed OK")
 
         except Exception as e:
             logger.error(f"Background processing error: {e}")
@@ -216,7 +208,7 @@ async def _process_file_background(file_id: str, local_path: str, mime_type: str
                 result = await db.execute(select(FileModel).where(FileModel.id == file_id))
                 f = result.scalar_one_or_none()
                 if f:
-                    f.summary = "處理失敗，請重新上傳"
+                    f.summary = "\u8655\u7406\u5931\u6557\uff0c\u8acb\u91cd\u65b0\u4e0a\u50b3"
                     f.is_indexed = True
                     await db.commit()
             except Exception:
@@ -228,49 +220,34 @@ async def _generate_summary_from_local(local_path: str, mime_type: str, display_
     text = ""
     try:
         if mime_type == "application/pdf":
-            try:
-                import pdfplumber
-                with pdfplumber.open(local_path) as pdf:
-                    text = "\n".join(p.extract_text() or "" for p in pdf.pages[:5])
-            except ImportError:
-                import PyPDF2
-                with open(local_path, "rb") as f:
-                    reader = PyPDF2.PdfReader(f)
-                    text = "\n".join(page.extract_text() or "" for page in reader.pages[:5])
-        elif "wordprocessingml" in mime_type:
+            import pdfplumber
+            with pdfplumber.open(local_path) as pdf:
+                text = "\n".join(p.extract_text() or "" for p in pdf.pages[:5])
+        elif "word" in mime_type:
             from docx import Document
             doc = Document(local_path)
             text = "\n".join(p.text for p in doc.paragraphs[:50])
-        elif "spreadsheetml" in mime_type:
-            import openpyxl
-            wb = openpyxl.load_workbook(local_path, read_only=True, data_only=True)
-            rows = []
-            for ws in list(wb.worksheets)[:2]:
-                for row in list(ws.iter_rows(values_only=True))[:20]:
-                    rows.append("\t".join(str(c) if c is not None else "" for c in row))
-            text = "\n".join(rows)
         elif "presentationml" in mime_type or "powerpoint" in mime_type:
             from pptx import Presentation
             prs = Presentation(local_path)
             slides_text = []
-            for i, slide in enumerate(prs.slides[:15]):
-                slide_parts = []
+            for i, slide in enumerate(prs.slides[:10]):
+                slide_lines = []
                 for shape in slide.shapes:
                     if hasattr(shape, "text") and shape.text.strip():
-                        slide_parts.append(shape.text.strip())
-                if slide_parts:
-                    slides_text.append(f"第{i+1}頁: " + " | ".join(slide_parts))
+                        slide_lines.append(shape.text.strip())
+                if slide_lines:
+                    slides_text.append(f"\u7b2c{i+1}\u9801: " + " | ".join(slide_lines))
             text = "\n".join(slides_text)
         elif mime_type in ("text/plain", "text/markdown"):
             async with aiofiles.open(local_path, "r", encoding="utf-8", errors="ignore") as f:
                 text = await f.read()
-            text = text[:4000]
-    except Exception as e:
-        logger.warning(f"Local extraction failed for {display_name}: {e}")
-        return f"檔案 {display_name} 已上傳至知識庫。"
+            text = text[:3000]
+    except Exception:
+        return f"\u6a94\u6848 {display_name} \u5df2\u4e0a\u50b3\u81f3\u77e5\u8b58\u5eab\u3002"
 
     if not text.strip():
-        return f"檔案 {display_name} 內容為空或無法讀取。"
+        return f"\u6a94\u6848 {display_name} \u5167\u5bb9\u70ba\u7a7a\u6216\u7121\u6cd5\u8b80\u53d6\u3002"
 
-    prompt = f"請用繁體中文為以下文件內容生成摘要（200字以內），說明主要內容與重點：\n\n{text[:3000]}"
+    prompt = f"\u8acb\u7528\u7e41\u9ad4\u4e2d\u6587\u70ba\u4ee5\u4e0b\u6587\u4ef6\u751f\u6210\u6458\u8981\uff08200\u5b57\u4ee5\u5167\uff09\uff1a\n\n{text[:2000]}"
     return await generate_text(prompt)
