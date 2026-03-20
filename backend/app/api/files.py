@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, UploadFile, File as UploadFileType, HTTPException, BackgroundTasks, Form, Body
+from fastapi import APIRouter, Depends, UploadFile, File as FastAPIFile, HTTPException, BackgroundTasks, Form, Body
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -6,7 +6,7 @@ import os, aiofiles, uuid, mimetypes, asyncio, logging
 from typing import Optional
 
 from ..db.database import get_db
-from ..db.models import File, Project
+from ..db.models import File as FileModel, Project
 from ..core.gemini import upload_file_to_gemini, generate_file_summary
 
 router = APIRouter(prefix="/files", tags=["files"])
@@ -32,7 +32,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 @router.get("/{project_id}/folders")
 async def list_folders(project_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(File.folder_path).where(File.project_id == project_id).distinct()
+        select(FileModel.folder_path).where(FileModel.project_id == project_id).distinct()
     )
     paths = sorted(set(row[0] or "/" for row in result.fetchall()))
     folders = list(paths)
@@ -58,10 +58,10 @@ async def list_files(
     if not project:
         raise HTTPException(404, "Project not found")
 
-    query = select(File).where(File.project_id == project_id)
+    query = select(FileModel).where(FileModel.project_id == project_id)
     if folder is not None:
-        query = query.where(File.folder_path == folder)
-    query = query.order_by(File.created_at.desc())
+        query = query.where(FileModel.folder_path == folder)
+    query = query.order_by(FileModel.created_at.desc())
 
     result = await db.execute(query)
     files = result.scalars().all()
@@ -84,7 +84,7 @@ async def list_files(
 async def upload_file(
     project_id: str,
     background_tasks: BackgroundTasks,
-    file: UploadFileType = UploadFileType(...),
+    file: UploadFile = FastAPIFile(...),
     folder: str = Form(default="/"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -114,7 +114,7 @@ async def upload_file(
     async with aiofiles.open(local_path, "wb") as f:
         await f.write(content)
 
-    db_file = File(
+    db_file = FileModel(
         id=file_id,
         project_id=project_id,
         filename=filename,
@@ -152,7 +152,7 @@ async def move_file(
     folder: str = Body(..., embed=True),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(File).where(File.id == file_id))
+    result = await db.execute(select(FileModel).where(FileModel.id == file_id))
     f = result.scalar_one_or_none()
     if not f:
         raise HTTPException(404, "File not found")
@@ -163,7 +163,7 @@ async def move_file(
 
 @router.delete("/{file_id}")
 async def delete_file(file_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(File).where(File.id == file_id))
+    result = await db.execute(select(FileModel).where(FileModel.id == file_id))
     f = result.scalar_one_or_none()
     if not f:
         raise HTTPException(404, "File not found")
@@ -181,7 +181,7 @@ async def _process_file_background(file_id: str, local_path: str, mime_type: str
     from ..db.database import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
         try:
-            result = await db.execute(select(File).where(File.id == file_id))
+            result = await db.execute(select(FileModel).where(FileModel.id == file_id))
             f = result.scalar_one_or_none()
             if not f:
                 return
@@ -213,7 +213,7 @@ async def _process_file_background(file_id: str, local_path: str, mime_type: str
         except Exception as e:
             logger.error(f"Background processing error: {e}")
             try:
-                result = await db.execute(select(File).where(File.id == file_id))
+                result = await db.execute(select(FileModel).where(FileModel.id == file_id))
                 f = result.scalar_one_or_none()
                 if f:
                     f.summary = "處理失敗，請重新上傳"
