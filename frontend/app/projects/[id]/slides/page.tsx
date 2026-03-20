@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import {
   Wand2, Download, Plus, Trash2, Loader, ChevronLeft, ChevronRight,
-  Edit2, X, Layers, Check, BarChart2, PieChart, GitBranch, Table2,
+  Edit2, X, Layers, Check, BarChart2, PieChart as PieChartIcon, GitBranch, Table2,
   Quote, AlignLeft, Columns, TrendingUp, Star, BookOpen,
 } from "lucide-react";
 import { slidesApi, filesApi, type Presentation, type PresentationSummary, type Slide, type FileItem } from "@/lib/api";
@@ -296,7 +296,7 @@ function SlideTypeIcon({ type }: { type: string }) {
     two_column: <Columns size={11} />,
     bar_chart:  <BarChart2 size={11} />,
     line_chart: <TrendingUp size={11} />,
-    pie_chart:  <PieChart size={11} />,
+    pie_chart:  <PieChartIcon size={11} />,
     flowchart:  <GitBranch size={11} />,
     table:      <Table2 size={11} />,
     quote:      <Quote size={11} />,
