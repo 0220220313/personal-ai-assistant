@@ -130,11 +130,12 @@ export default function ChatPage() {
     };
     setMessages((prev) => [...prev, tempUserMsg]);
 
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
       const res = await streamChat(id, text, selectedFiles);
       if (!res.body) return;
 
-      const reader = res.body.getReader();
+      reader = res.body.getReader();
       const decoder = new TextDecoder();
       let accumulated = "";
       const newActions: PendingAction[] = [];
@@ -186,6 +187,7 @@ export default function ChatPage() {
     } catch (e) {
       console.error(e);
     } finally {
+      reader?.cancel();
       setIsStreaming(false);
       setSelectedFiles([]);
     }
@@ -497,3 +499,4 @@ export default function ChatPage() {
     </ProjectLayout>
   );
 }
+
