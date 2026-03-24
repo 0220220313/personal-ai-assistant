@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Send, Trash2, Sparkles, ChevronDown, ChevronUp,
-  Brain, CheckSquare, Terminal, BookmarkPlus, Cpu,
+  Brain, CheckSquare, Terminal, BookmarkPlus, Cpu, Paperclip, X,
 } from "lucide-react";
 import {
   chatApi, filesApi, memoryApi, streamChat,
@@ -77,7 +77,9 @@ export default function ChatPage() {
   const [streamingText, setStreamingText] = useState("");
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [filePopoverOpen, setFilePopoverOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadData();
@@ -86,6 +88,19 @@ export default function ChatPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingText, pendingActions]);
+
+  // Close popover on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setFilePopoverOpen(false);
+      }
+    }
+    if (filePopoverOpen) {
+      document.addEventListener("mousedown", handleClick);
+    }
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [filePopoverOpen]);
 
   async function loadData() {
     const [msgs, fls, mems] = await Promise.all([
@@ -143,7 +158,6 @@ export default function ChatPage() {
               const pa: PendingAction = { action: data.action, data: data.data };
               newActions.push(pa);
               setPendingActions([...newActions]);
-              // If memory_saved, refresh memories
               if (data.action === "memory_saved") {
                 memoryApi.list(id).then(setMemories).catch(() => {});
               }
@@ -153,7 +167,6 @@ export default function ChatPage() {
               setPendingActions([]);
             }
           } catch {
-            // Legacy format fallback
             try {
               const raw = line.replace(/^data: /, "");
               const data = JSON.parse(raw);
@@ -188,6 +201,14 @@ export default function ChatPage() {
     await memoryApi.delete(id, key);
     setMemories((prev) => prev.filter((m) => m.key !== key));
   }
+
+  function toggleFile(fileId: string) {
+    setSelectedFiles((prev) =>
+      prev.includes(fileId) ? prev.filter((x) => x !== fileId) : [...prev, fileId]
+    );
+  }
+
+  const selectedFileObjects = files.filter((f) => selectedFiles.includes(f.id));
 
   return (
     <ProjectLayout projectId={id} activeTab="chat">
@@ -236,7 +257,6 @@ export default function ChatPage() {
               </div>
             ))}
 
-            {/* 串流中 action 卡片 */}
             {pendingActions.length > 0 && (
               <div className="flex justify-start">
                 <div className="ml-9 flex flex-col gap-1">
@@ -247,7 +267,6 @@ export default function ChatPage() {
               </div>
             )}
 
-            {/* 串流中的回覆 */}
             {streamingText && (
               <div className="flex justify-start">
                 <div className="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-xs mr-2 mt-1 shrink-0">
@@ -290,34 +309,6 @@ export default function ChatPage() {
             <div ref={bottomRef} />
           </div>
 
-          {/* 引用檔案 */}
-          {files.length > 0 && (
-            <div className="px-4 py-2 border-t border-gray-800">
-              <p className="text-xs text-gray-500 mb-1.5">引用知識庫檔案：</p>
-              <div className="flex flex-wrap gap-1.5">
-                {files.map((f) => (
-                  <button
-                    key={f.id}
-                    onClick={() =>
-                      setSelectedFiles((prev) =>
-                        prev.includes(f.id)
-                          ? prev.filter((x) => x !== f.id)
-                          : [...prev, f.id]
-                      )
-                    }
-                    className={`text-xs px-2.5 py-1 rounded-full border transition-all ${
-                      selectedFiles.includes(f.id)
-                        ? "bg-indigo-600 border-indigo-500 text-white"
-                        : "bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500"
-                    }`}
-                  >
-                    📄 {f.original_name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
           {/* 快速指令 */}
           <div className="px-4 pt-2 flex gap-2 flex-wrap">
             {QUICK_COMMANDS.map((cmd) => (
@@ -334,7 +325,85 @@ export default function ChatPage() {
 
           {/* 輸入區 */}
           <div className="p-4 border-t border-gray-800">
+            {/* 已選文件 chips */}
+            {selectedFileObjects.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {selectedFileObjects.map((f) => (
+                  <span
+                    key={f.id}
+                    className="inline-flex items-center gap-1 text-xs bg-indigo-900/60 border border-indigo-700/60 text-indigo-300 rounded-full px-2.5 py-1"
+                  >
+                    📄 {f.original_name}
+                    <button
+                      onClick={() => toggleFile(f.id)}
+                      className="ml-0.5 text-indigo-400 hover:text-white transition-colors"
+                    >
+                      <X size={10} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
             <div className="flex items-end gap-2">
+              {/* 迴紋針按鈕 + Popover */}
+              {files.length > 0 && (
+                <div className="relative" ref={popoverRef}>
+                  <button
+                    onClick={() => setFilePopoverOpen((v) => !v)}
+                    className={`p-3 rounded-xl transition-colors ${
+                      filePopoverOpen || selectedFiles.length > 0
+                        ? "bg-indigo-600 text-white"
+                        : "bg-gray-800 text-gray-400 hover:text-gray-300 hover:bg-gray-700"
+                    }`}
+                    title="選取知識庫文件"
+                  >
+                    <Paperclip size={16} />
+                    {selectedFiles.length > 0 && (
+                      <span className="absolute -top-1 -right-1 bg-indigo-500 text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">
+                        {selectedFiles.length}
+                      </span>
+                    )}
+                  </button>
+
+                  {filePopoverOpen && (
+                    <div className="absolute bottom-full mb-2 left-0 w-72 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-20 overflow-hidden">
+                      <div className="px-3 py-2 border-b border-gray-700 text-xs text-gray-400 font-medium">
+                        選取知識庫文件（可多選）
+                      </div>
+                      <div className="max-h-56 overflow-y-auto p-2 space-y-1">
+                        {files.map((f) => (
+                          <button
+                            key={f.id}
+                            onClick={() => toggleFile(f.id)}
+                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition-colors ${
+                              selectedFiles.includes(f.id)
+                                ? "bg-indigo-600/30 border border-indigo-600/50 text-indigo-200"
+                                : "text-gray-300 hover:bg-gray-700"
+                            }`}
+                          >
+                            <span className="shrink-0">
+                              {selectedFiles.includes(f.id) ? "✅" : "📄"}
+                            </span>
+                            <span className="truncate">{f.original_name}</span>
+                          </button>
+                        ))}
+                      </div>
+                      {selectedFiles.length > 0 && (
+                        <div className="px-3 py-2 border-t border-gray-700">
+                          <button
+                            onClick={() => setSelectedFiles([])}
+                            className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                          >
+                            清除所有選取
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="flex-1 bg-gray-800 border border-gray-700 rounded-xl overflow-hidden focus-within:border-indigo-500 transition-colors">
                 <textarea
                   value={input}
