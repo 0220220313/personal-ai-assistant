@@ -18,8 +18,8 @@ class Project(Base):
     tags:        Mapped[str]  = mapped_column(Text, default="[]")   # JSON array
     color:       Mapped[str]  = mapped_column(String(20), default="#6366f1")
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at:  Mapped[str]  = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at:  Mapped[str]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    created_at:  Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at:  Mapped[datetime]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
     messages:      Mapped[list["Message"]]       = relationship("Message",       back_populates="project", cascade="all, delete-orphan")
     files:         Mapped[list["File"]]          = relationship("File",          back_populates="project", cascade="all, delete-orphan")
@@ -37,7 +37,7 @@ class Message(Base):
     role:       Mapped[str]  = mapped_column(String(20))   # user / assistant / system
     content:    Mapped[str]  = mapped_column(Text)
     file_refs:  Mapped[str]  = mapped_column(Text, default="[]")  # 引用的 file id list (JSON)
-    created_at: Mapped[str]  = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     project: Mapped["Project"] = relationship("Project", back_populates="messages")
 
@@ -55,7 +55,7 @@ class File(Base):
     summary:         Mapped[str]  = mapped_column(Text, default="")   # 自動摘要
     is_indexed:      Mapped[bool] = mapped_column(Boolean, default=False)  # 是否已加入知識庫
     folder_path:     Mapped[str]  = mapped_column(String(500), default="/")  # 資料夾路徑
-    created_at:      Mapped[str]  = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at:      Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     project: Mapped["Project"] = relationship("Project", back_populates="files")
 
@@ -72,8 +72,8 @@ class Task(Base):
     assignee:    Mapped[str]  = mapped_column(String(100), default="")
     due_date:    Mapped[str]  = mapped_column(String(30), default="")
     source_msg:  Mapped[str]  = mapped_column(String, default="")  # 產生此任務的 message_id
-    created_at:  Mapped[str]  = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at:  Mapped[str]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    created_at:  Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at:  Mapped[datetime]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
     project: Mapped["Project"] = relationship("Project", back_populates="tasks")
 
@@ -86,7 +86,7 @@ class Report(Base):
     title:       Mapped[str]  = mapped_column(String(500))
     report_type: Mapped[str]  = mapped_column(String(50))   # progress / meeting / risk / weekly
     content:     Mapped[str]  = mapped_column(Text)
-    created_at:  Mapped[str]  = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at:  Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     project: Mapped["Project"] = relationship("Project", back_populates="reports")
 
@@ -98,8 +98,8 @@ class AgentCommand(Base):
     command:    Mapped[str]  = mapped_column(Text)
     status:     Mapped[str]  = mapped_column(String(20), default="pending")  # pending/running/done/error
     result:     Mapped[str]  = mapped_column(Text, default="")
-    created_at: Mapped[str]  = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[str]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    created_at: Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
 # ─── 推播訂閱 ─────────────────────────────────────────
 class PushSubscription(Base):
@@ -109,7 +109,7 @@ class PushSubscription(Base):
     endpoint:     Mapped[str]  = mapped_column(Text, unique=True)
     p256dh:       Mapped[str]  = mapped_column(Text)
     auth:         Mapped[str]  = mapped_column(Text)
-    created_at:   Mapped[str]  = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at:   Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 # ─── 專案記憶 ─────────────────────────────────────────
 class ProjectMemory(Base):
@@ -119,8 +119,8 @@ class ProjectMemory(Base):
     project_id: Mapped[str]  = mapped_column(String, ForeignKey("projects.id", ondelete="CASCADE"))
     key:        Mapped[str]  = mapped_column(String(200), nullable=False)   # 記憶的 key（如 "user_preference"）
     value:      Mapped[str]  = mapped_column(Text, nullable=False)           # 記憶的內容
-    created_at: Mapped[str]  = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[str]  = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
     project: Mapped["Project"] = relationship("Project", back_populates="memories")
 
@@ -129,13 +129,14 @@ class Presentation(Base):
     __tablename__ = "presentations"
 
     id:         Mapped[str]  = mapped_column(String, primary_key=True, default=gen_uuid)
-    project_id: Mapped[str]  = mapped_column(String, ForeignKey("projects.id"))
+    project_id: Mapped[str]  = mapped_column(String, ForeignKey("projects.id", ondelete="CASCADE"))
     topic:      Mapped[str]  = mapped_column(String(500), default="")
     title:      Mapped[str]  = mapped_column(String(500))
     subtitle:   Mapped[str]  = mapped_column(Text, default="")
     slides:     Mapped[str]  = mapped_column(Text, default="[]")   # JSON array
     template:   Mapped[str]  = mapped_column(String(50), default="professional")
-    created_at: Mapped[str]  = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[str]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    created_at: Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
     project: Mapped["Project"] = relationship("Project", back_populates="presentations")
+
