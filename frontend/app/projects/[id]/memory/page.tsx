@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { Brain, Plus, Trash2, RefreshCw } from "lucide-react";
 import { memoryApi, type ProjectMemory } from "@/lib/api";
@@ -15,9 +15,19 @@ export default function MemoryPage() {
   const [newValue, setNewValue] = useState("");
   const [saving, setSaving] = useState(false);
 
+  const loadMemories = useCallback(async () => {
+    setLoading(true);
+    try {
+      const mems = await memoryApi.list(id);
+      setMemories(mems);
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
   useEffect(() => {
     loadMemories();
-  }, [id]);
+  }, [loadMemories]);
 
   // SSE listener for memory_saved events
   useEffect(() => {
@@ -31,17 +41,7 @@ export default function MemoryPage() {
       } catch {}
     };
     return () => es.close();
-  }, [id]);
-
-  async function loadMemories() {
-    setLoading(true);
-    try {
-      const mems = await memoryApi.list(id);
-      setMemories(mems);
-    } finally {
-      setLoading(false);
-    }
-  }
+  }, [id, loadMemories]);
 
   async function addMemory(e: React.FormEvent) {
     e.preventDefault();
@@ -195,3 +195,4 @@ export default function MemoryPage() {
     </ProjectLayout>
   );
 }
+
