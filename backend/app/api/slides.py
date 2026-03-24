@@ -4,6 +4,8 @@ import json
 import re
 import uuid
 import logging
+import matplotlib
+matplotlib.use("Agg")
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -28,6 +30,14 @@ class GenerateRequest(BaseModel):
     template: str = "professional"
     extra_context: str = ""
     file_ids: List[str] = []
+
+
+class PresentationUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    subtitle: Optional[str] = None
+    template: Optional[str] = None
+    slides: Optional[List[Any]] = None
+    topic: Optional[str] = None
 
 
 # ── Templates ─────────────────────────────────────────
@@ -144,7 +154,7 @@ async def generate_slides(
         m = re.search(r'\{[\s\S]*\}', raw)
         data = json.loads(m.group() if m else raw)
     except Exception as e:
-        logger.error(f"AI generation error: {e}\nRaw: {raw[:500] if 'raw' in dir() else 'N/A'}")
+        logger.error(f"AI generation error: {e}\nRaw: {raw[:500] if 'raw' in locals() else 'N/A'}")
         data = {
             "title": req.topic,
             "subtitle": "",
@@ -206,7 +216,7 @@ async def get_slides(project_id: str, pres_id: str, db: AsyncSession = Depends(g
 async def update_slides(
     project_id: str,
     pres_id: str,
-    data: dict,
+    data: PresentationUpdateRequest,
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -218,17 +228,16 @@ async def update_slides(
     p = result.scalar_one_or_none()
     if not p:
         raise HTTPException(404)
-    if "title" in data:
-        p.title = data["title"]
-    if "subtitle" in data:
-        p.subtitle = data["subtitle"]
-    if "template" in data:
-        p.template = data["template"]
-    if "slides" in data:
-        slides = data["slides"]
-        p.slides = json.dumps(slides, ensure_ascii=False) if isinstance(slides, list) else slides
-    if "topic" in data:
-        p.topic = data["topic"]
+    if data.title is not None:
+        p.title = data.title
+    if data.subtitle is not None:
+        p.subtitle = data.subtitle
+    if data.template is not None:
+        p.template = data.template
+    if data.slides is not None:
+        p.slides = json.dumps(data.slides, ensure_ascii=False)
+    if data.topic is not None:
+        p.topic = data.topic
     await db.commit()
     await db.refresh(p)
     return _pres_to_dict(p)
@@ -359,9 +368,9 @@ def _header(slide, title, theme):
     _txt(slide, 0.35, 0.18, 12.5, 0.85, title, 26, bold=True, color=tc)
 
 def _chart_img(fig, bg_color) -> bytes:
-    import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    import matplotlib.pyplot as plt
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight", facecolor=bg_color, dpi=150)
+    fig.savefig(buf, format="png", bbox_inches="tight", facecolor=bg_color, dpi=150)
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -422,7 +431,6 @@ def _slide_two_col(p, s, theme):
         _txt(slide, 6.85, 2.05+i*0.78, 6.0, 0.7, f"▸  {item}", 15, color=theme["body_fg"])
 
 def _make_bar_chart(labels, values, unit, theme, line=False):
-    import matplotlib; matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import numpy as np
     dark = theme.get("dark", True)
@@ -472,7 +480,6 @@ def _slide_line(p, s, theme):
     slide.shapes.add_picture(img, Inches(0.9), Inches(1.3), Inches(11.4), Inches(5.8))
 
 def _slide_pie(p, s, theme):
-    import matplotlib; matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     slide = _blank(p)
     _header(slide, s.get("title",""), theme)
@@ -497,7 +504,6 @@ def _slide_pie(p, s, theme):
     slide.shapes.add_picture(img, Inches(1.8), Inches(1.2), Inches(9.6), Inches(6.0))
 
 def _slide_flow(p, s, theme):
-    import matplotlib; matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
     from matplotlib.patches import FancyBboxPatch
@@ -605,3 +611,4 @@ def _slide_summary(p, s, theme):
         _rect(slide, 2.5, 6.3, 8.33, 0.85, fill=theme["accent"])
         _txt(slide, 2.5, 6.3, 8.33, 0.85, f"→  {s['cta']}", 20, bold=True,
              color=(255,255,255), align="center")
+
