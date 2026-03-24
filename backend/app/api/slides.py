@@ -14,14 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from ..db.database import get_db
-from ..db.models import Project
+from ..db.models import Project, Presentation
 from ..core.gemini import generate_text
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/slides", tags=["slides"])
-
-# In-memory store (upgrade to DB later)
-_store: Dict[str, dict] = {}
 
 # ── Request / Response Models ─────────────────────────────
 
@@ -108,6 +105,20 @@ PROMPT_TMPL = """你是頂級的專業簡報設計師與數據分析師。請根
 
 根據主題靈活調整，不必每種類型都用，選最適合的組合。"""
 
+# ── Helper ────────────────────────────────────────────
+
+def _pres_to_dict(p: Presentation) -> dict:
+    return {
+        "id": p.id,
+        "project_id": p.project_id,
+        "topic": p.topic,
+        "template": p.template,
+        "title": p.title,
+        "subtitle": p.subtitle,
+        "slides": json.loads(p.slides) if isinstance(p.slides, str) else p.slides,
+        "created_at": str(p.created_at),
+    }
+
 # ── Routes ────────────────────────────────────────────
 
 @router.post("/{project_id}/generate")
@@ -142,65 +153,120 @@ async def generate_slides(
             ],
         }
 
-    pres_id = str(uuid.uuid4())
-    pres = {
-        "id": pres_id,
-        "project_id": project_id,
-        "topic": req.topic,
-        "template": req.template,
-        "title": data.get("title", req.topic),
-        "subtitle": data.get("subtitle", ""),
-        "slides": data.get("slides", []),
-        "created_at": datetime.utcnow().isoformat(),
-    }
-    _store[pres_id] = pres
-    return pres
+    pres = Presentation(
+        project_id=project_id,
+        topic=req.topic,
+        template=req.template,
+        title=data.get("title", req.topic),
+        subtitle=data.get("subtitle", ""),
+        slides=json.dumps(data.get("slides", []), ensure_ascii=False),
+    )
+    db.add(pres)
+    await db.commit()
+    await db.refresh(pres)
+    return _pres_to_dict(pres)
 
 
 @router.get("/{project_id}")
-async def list_slides(project_id: str):
-    items = [
+async def list_slides(project_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Presentation)
+        .where(Presentation.project_id == project_id)
+        .order_by(Presentation.created_at.desc())
+    )
+    items = result.scalars().all()
+    return [
         {
-            "id": p["id"], "title": p["title"], "topic": p["topic"],
-            "template": p["template"],
-            "slide_count": len(p["slides"]),
-            "created_at": p["created_at"],
+            "id": p.id,
+            "title": p.title,
+            "topic": p.topic,
+            "template": p.template,
+            "slide_count": len(json.loads(p.slides) if isinstance(p.slides, str) else p.slides),
+            "created_at": str(p.created_at),
         }
-        for p in _store.values() if p["project_id"] == project_id
+        for p in items
     ]
-    return sorted(items, key=lambda x: x["created_at"], reverse=True)
 
 
 @router.get("/{project_id}/{pres_id}")
-async def get_slides(project_id: str, pres_id: str):
-    p = _store.get(pres_id)
-    if not p or p["project_id"] != project_id:
+async def get_slides(project_id: str, pres_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Presentation).where(
+            Presentation.id == pres_id,
+            Presentation.project_id == project_id,
+        )
+    )
+    p = result.scalar_one_or_none()
+    if not p:
         raise HTTPException(404)
-    return p
+    return _pres_to_dict(p)
 
 
 @router.patch("/{project_id}/{pres_id}")
-async def update_slides(project_id: str, pres_id: str, data: dict):
-    p = _store.get(pres_id)
-    if not p or p["project_id"] != project_id:
+async def update_slides(
+    project_id: str,
+    pres_id: str,
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Presentation).where(
+            Presentation.id == pres_id,
+            Presentation.project_id == project_id,
+        )
+    )
+    p = result.scalar_one_or_none()
+    if not p:
         raise HTTPException(404)
-    p.update(data)
-    return p
+    if "title" in data:
+        p.title = data["title"]
+    if "subtitle" in data:
+        p.subtitle = data["subtitle"]
+    if "template" in data:
+        p.template = data["template"]
+    if "slides" in data:
+        slides = data["slides"]
+        p.slides = json.dumps(slides, ensure_ascii=False) if isinstance(slides, list) else slides
+    if "topic" in data:
+        p.topic = data["topic"]
+    await db.commit()
+    await db.refresh(p)
+    return _pres_to_dict(p)
 
 
 @router.delete("/{project_id}/{pres_id}")
-async def delete_slides(project_id: str, pres_id: str):
-    _store.pop(pres_id, None)
+async def delete_slides(
+    project_id: str,
+    pres_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Presentation).where(
+            Presentation.id == pres_id,
+            Presentation.project_id == project_id,
+        )
+    )
+    p = result.scalar_one_or_none()
+    if p:
+        await db.delete(p)
+        await db.commit()
     return {"ok": True}
 
 
 @router.get("/{project_id}/{pres_id}/download")
-async def download_pptx(project_id: str, pres_id: str):
-    p = _store.get(pres_id)
-    if not p or p["project_id"] != project_id:
+async def download_pptx(project_id: str, pres_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Presentation).where(
+            Presentation.id == pres_id,
+            Presentation.project_id == project_id,
+        )
+    )
+    p = result.scalar_one_or_none()
+    if not p:
         raise HTTPException(404)
-    pptx_bytes = _build_pptx(p)
-    safe_title = re.sub(r'[^\w\u4e00-\u9fff\-_]', '_', p["title"])[:50]
+    pres_dict = _pres_to_dict(p)
+    pptx_bytes = _build_pptx(pres_dict)
+    safe_title = re.sub(r'[^\w\u4e00-\u9fff\-_]', '_', p.title)[:50]
     return StreamingResponse(
         io.BytesIO(pptx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
