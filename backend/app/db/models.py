@@ -21,11 +21,12 @@ class Project(Base):
     created_at:  Mapped[str]  = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at:  Mapped[str]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
-    messages:    Mapped[list["Message"]]       = relationship("Message",       back_populates="project", cascade="all, delete-orphan")
-    files:       Mapped[list["File"]]          = relationship("File",          back_populates="project", cascade="all, delete-orphan")
-    tasks:       Mapped[list["Task"]]          = relationship("Task",          back_populates="project", cascade="all, delete-orphan")
-    reports:     Mapped[list["Report"]]        = relationship("Report",        back_populates="project", cascade="all, delete-orphan")
-    memories:    Mapped[list["ProjectMemory"]] = relationship("ProjectMemory", back_populates="project", cascade="all, delete-orphan")
+    messages:      Mapped[list["Message"]]       = relationship("Message",       back_populates="project", cascade="all, delete-orphan")
+    files:         Mapped[list["File"]]          = relationship("File",          back_populates="project", cascade="all, delete-orphan")
+    tasks:         Mapped[list["Task"]]          = relationship("Task",          back_populates="project", cascade="all, delete-orphan")
+    reports:       Mapped[list["Report"]]        = relationship("Report",        back_populates="project", cascade="all, delete-orphan")
+    memories:      Mapped[list["ProjectMemory"]] = relationship("ProjectMemory", back_populates="project", cascade="all, delete-orphan")
+    presentations: Mapped[list["Presentation"]]  = relationship("Presentation",  back_populates="project", cascade="all, delete-orphan")
 
 # ─── 對話訊息 ─────────────────────────────────────────
 class Message(Base):
@@ -122,3 +123,19 @@ class ProjectMemory(Base):
     updated_at: Mapped[str]  = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     project: Mapped["Project"] = relationship("Project", back_populates="memories")
+
+# ─── 簡報 ────────────────────────────────────────────
+class Presentation(Base):
+    __tablename__ = "presentations"
+
+    id:         Mapped[str]  = mapped_column(String, primary_key=True, default=gen_uuid)
+    project_id: Mapped[str]  = mapped_column(String, ForeignKey("projects.id"))
+    topic:      Mapped[str]  = mapped_column(String(500), default="")
+    title:      Mapped[str]  = mapped_column(String(500))
+    subtitle:   Mapped[str]  = mapped_column(Text, default="")
+    slides:     Mapped[str]  = mapped_column(Text, default="[]")   # JSON array
+    template:   Mapped[str]  = mapped_column(String(50), default="professional")
+    created_at: Mapped[str]  = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[str]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+
+    project: Mapped["Project"] = relationship("Project", back_populates="presentations")
