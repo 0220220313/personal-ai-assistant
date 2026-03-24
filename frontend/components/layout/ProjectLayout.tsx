@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { MessageSquare, BookOpen, CheckSquare, FileBarChart, ArrowLeft, Presentation } from "lucide-react";
+import { MessageSquare, BookOpen, CheckSquare, FileBarChart, ArrowLeft, Presentation, Brain } from "lucide-react";
 import { projectsApi, type Project } from "@/lib/api";
 
 const TABS = [
@@ -10,6 +10,7 @@ const TABS = [
   { key: "tasks",     label: "任務",   icon: CheckSquare },
   { key: "reports",   label: "報告",   icon: FileBarChart },
   { key: "slides",    label: "簡報",   icon: Presentation },
+  { key: "memory",    label: "記憶",   icon: Brain },
 ];
 
 interface Props {
