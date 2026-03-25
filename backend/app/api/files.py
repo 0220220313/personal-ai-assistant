@@ -297,8 +297,8 @@ def _pptx_to_images(pptx_path: str, output_dir: str) -> list[str]:
 
 
 async def _describe_slide_image(image_path: str, slide_index: int) -> str:
-    from google import genai
-    import os
+    from google.genai import types
+    import asyncio
 
     with open(image_path, "rb") as img_file:
         image_bytes = img_file.read()
@@ -308,15 +308,21 @@ async def _describe_slide_image(image_path: str, slide_index: int) -> str:
         "包括圖片、圖表、圖形等非文字元素的內容和含義。請用繁體中文回答，100字以內。"
     )
 
-    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
-    response = await client.aio.models.generate_content(
+    from ..core.gemini import get_client
+    client = get_client()
+
+    resp = await asyncio.to_thread(
+        client.models.generate_content,
         model="gemini-1.5-flash",
-        contents=[
-            {"inline_data": {"mime_type": "image/png", "data": image_bytes}},
-            {"text": prompt},
-        ],
+        contents=types.Content(
+            role="user",
+            parts=[
+                types.Part(inline_data=types.Blob(mime_type="image/png", data=image_bytes)),
+                types.Part(text=prompt),
+            ],
+        ),
     )
-    return response.text
+    return resp.text or ""
 
 
 # ── Background Processing ──────────────────────────────────
