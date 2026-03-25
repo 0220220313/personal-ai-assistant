@@ -21,5 +21,11 @@ services:
     depends_on:
       - backend
 
+  pptx-service:
+    build: ./pptx-service
+    ports:
+      - "3001:3001"
+    restart: unless-stopped
+
 volumes:
   backend_data:
