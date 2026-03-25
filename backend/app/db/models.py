@@ -140,3 +140,13 @@ class Presentation(Base):
 
     project: Mapped["Project"] = relationship("Project", back_populates="presentations")
 
+# ─── PPTX QA Job ─────────────────────────────────────
+class PptxQAJob(Base):
+    __tablename__ = "pptx_qa_jobs"
+
+    id:           Mapped[str]  = mapped_column(String, primary_key=True, default=gen_uuid)
+    pres_id:      Mapped[str]  = mapped_column(String, ForeignKey("presentations.id", ondelete="CASCADE"))
+    status:       Mapped[str]  = mapped_column(String(20), default="pending")  # pending/running/passed/failed/fixed
+    issues_found: Mapped[str]  = mapped_column(Text, default="[]")  # JSON array
+    created_at:   Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at:   Mapped[datetime]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
