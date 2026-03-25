@@ -51,6 +51,8 @@ export const filesApi = {
   moveFile: (fileId: string, folder: string) =>
     api(`/api/files/${fileId}/move`, { method: "PATCH", body: JSON.stringify({ folder }) }),
   delete: (fileId: string) => api(`/api/files/${fileId}`, { method: "DELETE" }),
+  parsePptx: (fileId: string) =>
+    api<PptxParseResult>(`/api/files/${fileId}/parse-pptx`, { method: "POST" }),
 };
 
 export const tasksApi = {
@@ -83,7 +85,7 @@ export const agentApi = {
 };
 
 export const slidesApi = {
-  generate: (projectId: string, data: { topic: string; num_slides?: number; template?: string; extra_context?: string; file_ids?: string[] }) =>
+  generate: (projectId: string, data: { topic: string; num_slides?: number; template?: string; extra_context?: string; file_ids?: string[]; slide_types?: string[] }) =>
     api<Presentation>(`/api/slides/${projectId}/generate`, { method: "POST", body: JSON.stringify(data) }),
   list: (projectId: string) => api<PresentationSummary[]>(`/api/slides/${projectId}`),
   get:  (projectId: string, presId: string) => api<Presentation>(`/api/slides/${projectId}/${presId}`),
@@ -121,6 +123,12 @@ export interface FileItem {
   folder_path: string; created_at: string;
 }
 export type File = FileItem;
+
+export interface PptxParseResult {
+  slide_count: number;
+  text_summary: string;
+  image_count: number;
+}
 
 export interface Task {
   id: string; title: string; description: string;
