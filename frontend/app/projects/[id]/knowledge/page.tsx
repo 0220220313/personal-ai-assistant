@@ -5,9 +5,9 @@ import { useDropzone } from "react-dropzone";
 import {
   Upload, Trash2, CheckCircle, Clock, ChevronRight, ChevronDown,
   FolderOpen, Folder, Plus, X, File, Image, FileSpreadsheet,
-  FileText, Home, Move,
+  FileText, Home, Move, Presentation, Loader,
 } from "lucide-react";
-import { filesApi, type FileItem } from "@/lib/api";
+import { filesApi, type FileItem, type PptxParseResult } from "@/lib/api";
 import ProjectLayout from "@/components/layout/ProjectLayout";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -23,7 +23,7 @@ function FileIcon({ type, size = 14 }: { type: string; size?: number }) {
   if (type === "image") return <Image size={size} className={`${cls} text-purple-400`} />;
   if (type === "pdf") return <FileText size={size} className={`${cls} text-red-400`} />;
   if (type === "xlsx") return <FileSpreadsheet size={size} className={`${cls} text-green-400`} />;
-  if (type === "pptx") return <FileText size={size} className={`${cls} text-orange-400`} />;
+  if (type === "pptx") return <Presentation size={size} className={`${cls} text-orange-400`} />;
   if (type === "docx") return <FileText size={size} className={`${cls} text-blue-400`} />;
   return <File size={size} className={`${cls} text-gray-400`} />;
 }
@@ -143,6 +143,8 @@ export default function KnowledgePage() {
   const [progress, setProgress] = useState<string[]>([]);
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+  const [parsingId, setParsingId] = useState<string | null>(null);
+  const [parseResults, setParseResults] = useState<Record<string, PptxParseResult>>({});
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -157,6 +159,19 @@ export default function KnowledgePage() {
       setAllFiles(files);
       setVirtualFolders(prev => Array.from(new Set([...folders, ...prev])));
     } catch {}
+  }
+
+  async function parsePptx(file: FileItem) {
+    setParsingId(file.id);
+    try {
+      const result = await filesApi.parsePptx(file.id);
+      setParseResults(prev => ({ ...prev, [file.id]: result }));
+      setExpandedId(file.id);
+    } catch (e: any) {
+      alert("解析失敗：" + (e.message || "未知錯誤"));
+    } finally {
+      setParsingId(null);
+    }
   }
 
   const currentFiles = allFiles.filter(f => (f.folder_path || "/") === currentFolder);
@@ -313,6 +328,19 @@ export default function KnowledgePage() {
                           <p className="text-xs text-gray-500 mt-0.5">{formatBytes(file.file_size)} · {new Date(file.created_at).toLocaleDateString("zh-TW")}</p>
                         </div>
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {file.file_type === "pptx" && (
+                            <button
+                              onClick={() => parsePptx(file)}
+                              disabled={parsingId === file.id}
+                              className="flex items-center gap-1 px-2 py-1.5 hover:bg-orange-900/30 rounded-lg text-orange-400 hover:text-orange-300 transition-colors text-xs disabled:opacity-50"
+                              title="解析 PPTX 內容"
+                            >
+                              {parsingId === file.id
+                                ? <Loader size={12} className="animate-spin" />
+                                : <Presentation size={12} />}
+                              解析
+                            </button>
+                          )}
                           {file.summary && (
                             <button onClick={() => { setExpandedId(expandedId === file.id ? null : file.id); setSelectedId(file.id); }}
                               className="px-2 py-1.5 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white transition-colors text-xs">
@@ -342,7 +370,37 @@ export default function KnowledgePage() {
                         </div>
                       )}
 
-                      {expandedId === file.id && file.summary && (
+                      {expandedId === file.id && parseResults[file.id] && (
+                        <div className="px-4 pb-4 border-t border-gray-800 pt-3">
+                          <p className="text-xs text-orange-400 mb-3 font-medium uppercase tracking-wider flex items-center gap-1.5">
+                            <Presentation size={11} /> PPTX 解析結果
+                          </p>
+                          <div className="grid grid-cols-3 gap-3 mb-3">
+                            <div className="bg-gray-800/60 rounded-lg p-3 text-center">
+                              <p className="text-2xl font-bold text-orange-400">{parseResults[file.id].slide_count}</p>
+                              <p className="text-xs text-gray-500 mt-0.5">投影片</p>
+                            </div>
+                            <div className="bg-gray-800/60 rounded-lg p-3 text-center">
+                              <p className="text-2xl font-bold text-purple-400">{parseResults[file.id].image_count}</p>
+                              <p className="text-xs text-gray-500 mt-0.5">圖片</p>
+                            </div>
+                            <div className="bg-gray-800/60 rounded-lg p-3 text-center">
+                              <p className="text-2xl font-bold text-green-400">✓</p>
+                              <p className="text-xs text-gray-500 mt-0.5">解析完成</p>
+                            </div>
+                          </div>
+                          {parseResults[file.id].text_summary && (
+                            <div>
+                              <p className="text-xs text-gray-500 mb-1.5 font-medium">文字摘要</p>
+                              <p className="text-sm text-gray-300 leading-relaxed bg-gray-800/40 rounded-lg px-3 py-2">
+                                {parseResults[file.id].text_summary}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {expandedId === file.id && !parseResults[file.id] && file.summary && (
                         <div className="px-4 pb-4 border-t border-gray-800 pt-3">
                           <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wider">AI 摘要</p>
                           <div className="text-sm text-gray-300 markdown-body">
