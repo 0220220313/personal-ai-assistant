@@ -4,6 +4,7 @@ from sqlalchemy.sql import func
 from .database import Base
 import uuid
 from datetime import datetime
+from typing import Optional
 
 def gen_uuid():
     return str(uuid.uuid4())
@@ -63,17 +64,18 @@ class File(Base):
 class Task(Base):
     __tablename__ = "tasks"
 
-    id:          Mapped[str]  = mapped_column(String, primary_key=True, default=gen_uuid)
-    project_id:  Mapped[str]  = mapped_column(String, ForeignKey("projects.id"))
-    title:       Mapped[str]  = mapped_column(String(500))
-    description: Mapped[str]  = mapped_column(Text, default="")
-    status:      Mapped[str]  = mapped_column(String(30), default="todo")  # todo/in_progress/done/archived
-    priority:    Mapped[str]  = mapped_column(String(10), default="medium")  # high/medium/low
-    assignee:    Mapped[str]  = mapped_column(String(100), default="")
-    due_date:    Mapped[str]  = mapped_column(String(30), default="")
-    source_msg:  Mapped[str]  = mapped_column(String, default="")  # 產生此任務的 message_id
-    created_at:  Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at:  Mapped[datetime]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    id:           Mapped[str]  = mapped_column(String, primary_key=True, default=gen_uuid)
+    project_id:   Mapped[str]  = mapped_column(String, ForeignKey("projects.id"))
+    title:        Mapped[str]  = mapped_column(String(500))
+    description:  Mapped[str]  = mapped_column(Text, default="")
+    status:       Mapped[str]  = mapped_column(String(30), default="todo")  # todo/in_progress/done/archived
+    priority:     Mapped[str]  = mapped_column(String(10), default="medium")  # high/medium/low
+    assignee:     Mapped[str]  = mapped_column(String(100), default="")
+    due_date:     Mapped[str]  = mapped_column(String(30), default="")
+    source_msg:   Mapped[str]  = mapped_column(String, default="")  # 產生此任務的 message_id
+    is_milestone: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at:   Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at:   Mapped[datetime]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
     project: Mapped["Project"] = relationship("Project", back_populates="tasks")
 
@@ -117,8 +119,8 @@ class ProjectMemory(Base):
 
     id:         Mapped[str]  = mapped_column(String, primary_key=True, default=gen_uuid)
     project_id: Mapped[str]  = mapped_column(String, ForeignKey("projects.id", ondelete="CASCADE"))
-    key:        Mapped[str]  = mapped_column(String(200), nullable=False)   # 記憶的 key（如 "user_preference"）
-    value:      Mapped[str]  = mapped_column(Text, nullable=False)           # 記憶的內容
+    key:        Mapped[str]  = mapped_column(String(200), nullable=False)
+    value:      Mapped[str]  = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
@@ -150,3 +152,24 @@ class PptxQAJob(Base):
     issues_found: Mapped[str]  = mapped_column(Text, default="[]")  # JSON array
     created_at:   Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at:   Mapped[datetime]  = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+
+# ─── 通知設定 ─────────────────────────────────────────
+class ProjectNotificationSetting(Base):
+    __tablename__ = "project_notification_settings"
+
+    id:               Mapped[str]      = mapped_column(String, primary_key=True, default=gen_uuid)
+    project_id:       Mapped[str]      = mapped_column(String, ForeignKey("projects.id", ondelete="CASCADE"), unique=True)
+    summary_schedule: Mapped[str]      = mapped_column(String, default="off")  # "daily"|"weekly"|"off"
+    created_at:       Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at:       Mapped[datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+
+# ─── 通知日誌 ─────────────────────────────────────────
+class NotificationLog(Base):
+    __tablename__ = "notification_logs"
+
+    id:                Mapped[str]           = mapped_column(String, primary_key=True, default=gen_uuid)
+    task_id:           Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    project_id:        Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    notification_type: Mapped[str]           = mapped_column(String)  # "due_24h"|"due_today"|"milestone"|"summary"
+    sent_date:         Mapped[str]           = mapped_column(String)  # YYYY-MM-DD
+    created_at:        Mapped[datetime]      = mapped_column(DateTime(timezone=True), server_default=func.now())
