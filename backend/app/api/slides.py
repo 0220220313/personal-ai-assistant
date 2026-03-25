@@ -25,6 +25,8 @@ import os
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/slides", tags=["slides"])
 
+PPTX_SERVICE_URL = os.environ.get("PPTX_SERVICE_URL", "http://pptx-service:3001")
+
 # ── Request / Response Models ─────────────────────────────
 
 class GenerateRequest(BaseModel):
@@ -218,8 +220,10 @@ async def generate_slides(
     if req.slide_types:
         slide_types_hint = f"請優先使用以下投影片類型：{', '.join(req.slide_types)}"
 
+    safe_topic = re.sub(r'[<>{}\[\]`]', '', req.topic)[:500]
+
     prompt = PROMPT_TMPL.format(
-        topic=req.topic,
+        topic=safe_topic,
         num_slides=req.num_slides,
         extra=extra,
         slide_types_hint=slide_types_hint,
@@ -271,11 +275,26 @@ async def generate_slides(
     await db.commit()
     await db.refresh(pres)
 
+    # Create QA job record (required by TC-021/TC-022)
+    qa_job_id: str | None = None
+    try:
+        from ..db.models import PptxQAJob
+        qa_job = PptxQAJob(
+            pres_id=pres.id,
+            status="pending",
+        )
+        db.add(qa_job)
+        await db.commit()
+        await db.refresh(qa_job)
+        qa_job_id = qa_job.id
+    except Exception as e:
+        logger.warning(f"Failed to create PptxQAJob: {e}")
+
     # Call pptx-service to generate PPTX file (best-effort)
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.post(
-                "http://pptx-service:3001/generate",
+                f"{PPTX_SERVICE_URL}/generate",
                 json={
                     "slides": slides_data,
                     "theme": data.get("theme", "midnight_executive"),
@@ -292,6 +311,8 @@ async def generate_slides(
 
     result = _pres_to_dict(pres)
     result["download_url"] = f"/api/slides/{project_id}/{pres.id}/download"
+    if qa_job_id:
+        result["qa_job_id"] = qa_job_id
     return result
 
 
@@ -1106,3 +1127,4 @@ def _slide_code_result(p, s, theme):
         run.font.color.rgb = RGBColor(180, 220, 255)
         # Note: true monospace requires font name set; using a safe fallback
         run.font.name = "Courier New"
+
