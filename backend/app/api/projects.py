@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
 from pydantic import BaseModel
 from typing import Optional
+from datetime import date
 import json
 
 from ..db.database import get_db
@@ -36,14 +37,19 @@ async def list_projects(
         .order_by(Project.updated_at.desc())
     )
     projects = result.scalars().all()
+    today_str = date.today().isoformat()
 
     data = []
     for p in projects:
-        # 計算各項目數量
         tasks_r = await db.execute(select(Task).where(Task.project_id == p.id))
         files_r = await db.execute(select(File).where(File.project_id == p.id))
-        tasks_count = len(tasks_r.scalars().all())
+        tasks = tasks_r.scalars().all()
         files_count = len(files_r.scalars().all())
+        tasks_count = len(tasks)
+        overdue_count = sum(
+            1 for t in tasks
+            if t.due_date and t.due_date < today_str and t.status not in ("done", "archived")
+        )
 
         data.append({
             "id": p.id,
@@ -54,6 +60,7 @@ async def list_projects(
             "is_archived": p.is_archived,
             "tasks_count": tasks_count,
             "files_count": files_count,
+            "overdue_count": overdue_count,
             "created_at": str(p.created_at),
             "updated_at": str(p.updated_at),
         })
