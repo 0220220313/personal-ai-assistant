@@ -9,14 +9,18 @@ load_dotenv()
 from .db.database import init_db
 from .core.gemini import init_gemini
 from .api import projects, chat, files, tasks, reports, agent, memory, remote, slides, notifications
+from .scheduler import start_scheduler, stop_scheduler
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     init_gemini()
+    start_scheduler()
     print("✅ DB ready")
     print("✅ Gemini ready")
+    print("✅ Scheduler ready")
     yield
+    stop_scheduler()
 
 app = FastAPI(title="個人 AI 助理 API", version="1.0.0", lifespan=lifespan)
 
