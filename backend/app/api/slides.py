@@ -27,6 +27,18 @@ router = APIRouter(prefix="/slides", tags=["slides"])
 
 PPTX_SERVICE_URL = os.environ.get("PPTX_SERVICE_URL", "http://pptx-service:3001")
 
+ALLOWED_SLIDE_TYPES: frozenset[str] = frozenset({
+    "title", "chapter", "content", "two_column",
+    "bar_chart", "line_chart", "pie_chart", "flowchart",
+    "table", "quote", "summary", "competitive_analysis",
+    "market_analysis", "literature_review", "feasibility_study", "code_result",
+})
+
+
+def _sanitize(text: str, max_len: int = 2000) -> str:
+    """Strip prompt-injection characters and truncate."""
+    return re.sub(r'[<>{}\[\]`]', '', text)[:max_len]
+
 # ── Request / Response Models ─────────────────────────────
 
 class GenerateRequest(BaseModel):
@@ -203,9 +215,9 @@ async def generate_slides(
     # Build extra context: combine extra_context, context, and file summaries
     extra_parts: list[str] = []
     if req.extra_context:
-        extra_parts.append(req.extra_context)
+        extra_parts.append(_sanitize(req.extra_context))
     if req.context:
-        extra_parts.append(req.context)
+        extra_parts.append(_sanitize(req.context))
 
     # If file_ids provided, fetch cross-file summaries using Gemini
     if req.file_ids:
@@ -218,7 +230,9 @@ async def generate_slides(
 
     slide_types_hint = ""
     if req.slide_types:
-        slide_types_hint = f"請優先使用以下投影片類型：{', '.join(req.slide_types)}"
+        valid_types = [t for t in req.slide_types if t in ALLOWED_SLIDE_TYPES]
+        if valid_types:
+            slide_types_hint = f"請優先使用以下投影片類型：{', '.join(valid_types)}"
 
     safe_topic = re.sub(r'[<>{}\[\]`]', '', req.topic)[:500]
 
@@ -276,9 +290,8 @@ async def generate_slides(
     await db.refresh(pres)
 
     # Create QA job record (required by TC-021/TC-022)
-    qa_job_id: str | None = None
+    from ..db.models import PptxQAJob
     try:
-        from ..db.models import PptxQAJob
         qa_job = PptxQAJob(
             pres_id=pres.id,
             status="pending",
@@ -288,7 +301,8 @@ async def generate_slides(
         await db.refresh(qa_job)
         qa_job_id = qa_job.id
     except Exception as e:
-        logger.warning(f"Failed to create PptxQAJob: {e}")
+        logger.error(f"Failed to create PptxQAJob: {e}")
+        raise HTTPException(500, "QA job creation failed; ensure DB migration has been applied")
 
     # Call pptx-service to generate PPTX file (best-effort)
     try:
@@ -1127,4 +1141,5 @@ def _slide_code_result(p, s, theme):
         run.font.color.rgb = RGBColor(180, 220, 255)
         # Note: true monospace requires font name set; using a safe fallback
         run.font.name = "Courier New"
+
 
