@@ -49,7 +49,7 @@ class File(Base):
     project_id:      Mapped[str]  = mapped_column(String, ForeignKey("projects.id"))
     filename:        Mapped[str]  = mapped_column(String(500))
     original_name:   Mapped[str]  = mapped_column(String(500))
-    file_type:       Mapped[str]  = mapped_column(String(50))   # pdf / docx / xlsx / image / txt
+    file_type:       Mapped[str]  = mapped_column(String(50))   # pdf / docx / xlsx / image / txt / pptx
     file_size:       Mapped[int]  = mapped_column(Integer, default=0)
     gemini_file_uri: Mapped[str]  = mapped_column(Text, default="")   # Gemini File API URI
     summary:         Mapped[str]  = mapped_column(Text, default="")   # 自動摘要
