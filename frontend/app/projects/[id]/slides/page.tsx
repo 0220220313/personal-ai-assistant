@@ -5,6 +5,7 @@ import {
   Wand2, Download, Plus, Trash2, Loader, ChevronLeft, ChevronRight,
   Edit2, X, Layers, Check, BarChart2, PieChart as PieChartIcon, GitBranch,
   Table2, Quote, AlignLeft, Columns, TrendingUp, Star, BookOpen, FileText,
+  Info,
 } from "lucide-react";
 import { slidesApi, filesApi, type Presentation, type PresentationSummary, type Slide, type FileItem } from "@/lib/api";
 import ProjectLayout from "@/components/layout/ProjectLayout";
@@ -15,6 +16,46 @@ const TEMPLATES = [
   { key: "professional", label: "深色專業", colors: ["#0f0f1e","#6366f1","#ffffff"] },
   { key: "modern",       label: "明亮現代", colors: ["#f8f9ff","#6366f1","#1a1a2e"] },
   { key: "minimal",      label: "極簡白",   colors: ["#ffffff","#6366f1","#141828"] },
+];
+
+interface SlideTypeOption {
+  key: string;
+  label: string;
+  emoji: string;
+  tooltip: string;
+}
+
+const SLIDE_TYPE_OPTIONS: SlideTypeOption[] = [
+  {
+    key: "competitive_analysis",
+    label: "競爭分析",
+    emoji: "⚔️",
+    tooltip: "比較競爭對手優劣勢，包含市場定位、功能對比表格、SWOT 分析等",
+  },
+  {
+    key: "market_analysis",
+    label: "市場分析",
+    emoji: "📊",
+    tooltip: "市場規模、成長趨勢、目標客群分析，搭配圖表呈現市場數據",
+  },
+  {
+    key: "literature_review",
+    label: "文獻回顧",
+    emoji: "📚",
+    tooltip: "整理學術文獻、研究成果摘要，適合學術報告與研究發表",
+  },
+  {
+    key: "feasibility_study",
+    label: "可行性研究",
+    emoji: "🔬",
+    tooltip: "技術、財務、時程可行性評估，風險分析與建議方案",
+  },
+  {
+    key: "code_result",
+    label: "程式碼成果",
+    emoji: "💻",
+    tooltip: "展示程式架構、API 設計、執行結果截圖與技術實作說明",
+  },
 ];
 
 // ── Chart Renderers ──────────────────────────────────────
@@ -464,6 +505,8 @@ export default function SlidesPage() {
   const [editingSlide, setEditingSlide] = useState<any>(null);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [selectedSlideTypes, setSelectedSlideTypes] = useState<string[]>([]);
+  const [tooltipKey, setTooltipKey] = useState<string | null>(null);
   const [form, setForm] = useState({ topic:"", num_slides:10, template:"professional", extra_context:"" });
 
   useEffect(() => {
@@ -474,11 +517,24 @@ export default function SlidesPage() {
   const slide = current?.slides[activeIdx];
   const template = current?.template || form.template;
 
+  function toggleSlideType(key: string) {
+    setSelectedSlideTypes(prev =>
+      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+    );
+  }
+
   async function generate() {
     if (!form.topic.trim()||generating) return;
     setGenerating(true);
     try {
-      const p = await slidesApi.generate(id, { ...form, file_ids: selectedFiles });
+      const payload: Parameters<typeof slidesApi.generate>[1] = {
+        ...form,
+        file_ids: selectedFiles,
+      };
+      if (selectedSlideTypes.length > 0) {
+        payload.slide_types = selectedSlideTypes;
+      }
+      const p = await slidesApi.generate(id, payload);
       setCurrent(p); setActiveIdx(0);
       setPresentations(prev=>[{id:p.id,title:p.title,topic:p.topic,template:p.template,
         slide_count:p.slides.length,created_at:p.created_at},...prev]);
@@ -568,6 +624,63 @@ export default function SlidesPage() {
                 ))}
               </div>
             </div>
+
+            {/* Slide Type Multi-Select */}
+            <div>
+              <label className="text-xs text-gray-500 mb-1.5 block flex items-center gap-1">
+                <Layers size={11}/> 投影片類型
+                {selectedSlideTypes.length > 0 && (
+                  <span className="ml-auto text-[10px] text-indigo-400 bg-indigo-900/30 px-1.5 py-0.5 rounded-full">
+                    {selectedSlideTypes.length} 已選
+                  </span>
+                )}
+              </label>
+              <div className="space-y-1">
+                {SLIDE_TYPE_OPTIONS.map(opt => (
+                  <div key={opt.key} className="relative">
+                    <label
+                      className={`flex items-center gap-2 px-2.5 py-2 rounded-lg border cursor-pointer transition-colors ${
+                        selectedSlideTypes.includes(opt.key)
+                          ? "border-indigo-500/60 bg-indigo-900/20 text-indigo-300"
+                          : "border-gray-700/50 text-gray-400 hover:border-gray-600 hover:bg-gray-800/40"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedSlideTypes.includes(opt.key)}
+                        onChange={() => toggleSlideType(opt.key)}
+                        className="rounded border-gray-600 bg-gray-800 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0 shrink-0"
+                      />
+                      <span className="text-base leading-none">{opt.emoji}</span>
+                      <span className="text-xs flex-1">{opt.label}</span>
+                      <button
+                        type="button"
+                        onMouseEnter={() => setTooltipKey(opt.key)}
+                        onMouseLeave={() => setTooltipKey(null)}
+                        onClick={e => { e.preventDefault(); setTooltipKey(tooltipKey === opt.key ? null : opt.key); }}
+                        className="text-gray-600 hover:text-gray-400 transition-colors shrink-0"
+                      >
+                        <Info size={11} />
+                      </button>
+                    </label>
+                    {tooltipKey === opt.key && (
+                      <div className="absolute left-0 right-0 z-10 mt-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 shadow-xl">
+                        <p className="text-xs text-gray-300 leading-relaxed">{opt.tooltip}</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {selectedSlideTypes.length > 0 && (
+                <button
+                  onClick={() => setSelectedSlideTypes([])}
+                  className="mt-1.5 text-xs text-gray-600 hover:text-gray-400 transition-colors"
+                >
+                  清除選擇
+                </button>
+              )}
+            </div>
+
             <div>
               <label className="text-xs text-gray-500 mb-1 block">補充說明</label>
               <textarea value={form.extra_context} onChange={e=>setForm(f=>({...f,extra_context:e.target.value}))}
