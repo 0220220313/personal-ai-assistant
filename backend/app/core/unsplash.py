@@ -1,8 +1,40 @@
 import httpx
 import os
+import socket
+import ipaddress
 from typing import Optional
+from urllib.parse import urlparse
 
 UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "")
+
+_PRIVATE_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+]
+
+
+def _validate_url_not_ssrf(url: str) -> None:
+    """DNS 解析後驗證 IP 不在私有範圍，防止 SSRF 攻擊。"""
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError(f"Invalid URL (no hostname): {url}")
+
+    try:
+        resolved_ip = socket.getaddrinfo(hostname, None)[0][4][0]
+    except socket.gaierror as e:
+        raise ValueError(f"DNS resolution failed for {hostname}: {e}")
+
+    ip_obj = ipaddress.ip_address(resolved_ip)
+    for network in _PRIVATE_NETWORKS:
+        if ip_obj in network:
+            raise ValueError(
+                f"SSRF blocked: {hostname} resolves to private IP {resolved_ip}"
+            )
 
 
 async def search_image(keyword: str) -> Optional[str]:
@@ -18,7 +50,11 @@ async def search_image(keyword: str) -> Optional[str]:
             )
             data = r.json()
             if data.get("results"):
-                return data["results"][0]["urls"]["regular"]
+                image_url = data["results"][0]["urls"]["regular"]
+                _validate_url_not_ssrf(image_url)
+                return image_url
+    except ValueError:
+        raise
     except Exception:
         pass
     return None
