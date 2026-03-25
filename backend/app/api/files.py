@@ -297,17 +297,26 @@ def _pptx_to_images(pptx_path: str, output_dir: str) -> list[str]:
 
 
 async def _describe_slide_image(image_path: str, slide_index: int) -> str:
-    from ..core.gemini import generate_text
-    import base64
+    from google import genai
+    import os
 
     with open(image_path, "rb") as img_file:
-        image_data = base64.b64encode(img_file.read()).decode()
+        image_bytes = img_file.read()
 
     prompt = (
         f"請描述這張投影片（第 {slide_index + 1} 頁）的視覺內容，"
         "包括圖片、圖表、圖形等非文字元素的內容和含義。請用繁體中文回答，100字以內。"
     )
-    return await generate_text(f"{prompt}\n[image/png base64: {image_data[:100]}...]")
+
+    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
+    response = await client.aio.models.generate_content(
+        model="gemini-1.5-flash",
+        contents=[
+            {"inline_data": {"mime_type": "image/png", "data": image_bytes}},
+            {"text": prompt},
+        ],
+    )
+    return response.text
 
 
 # ── Background Processing ──────────────────────────────────
