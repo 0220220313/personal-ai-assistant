@@ -4,6 +4,7 @@ import json
 import re
 import uuid
 import logging
+import os
 import matplotlib
 matplotlib.use("Agg")
 from datetime import datetime
@@ -391,7 +392,7 @@ async def _summarize_files(file_ids: List[str], db: AsyncSession) -> str:
             parts.append({"text": "請用繁體中文為以上所有文件生成一份綜合摘要，提取關鍵資訊和主要論點，500字以內。"})
 
             response = client.models.generate_content(
-                model="gemini-2.5-pro-exp-03-25",
+                model=os.environ.get("GEMINI_MODEL", "gemini-1.5-pro"),
                 contents=[{"parts": parts}],
             )
             return response.text
