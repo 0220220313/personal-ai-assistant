@@ -23,6 +23,8 @@ from ..core.gemini import generate_text
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/slides", tags=["slides"])
 
+PPTX_SERVICE_URL = os.environ.get("PPTX_SERVICE_URL", "http://localhost:3001")
+
 # ── Request / Response Models ─────────────────────────────
 
 class GenerateRequest(BaseModel):
@@ -242,6 +244,32 @@ async def list_slides(project_id: str, db: AsyncSession = Depends(get_db)):
     ]
 
 
+@router.get("/{project_id}/{pres_id}/qa-status")
+async def get_qa_status(
+    project_id: str,
+    pres_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get QA job status for a presentation."""
+    from ..db.models import PptxQAJob
+    result = await db.execute(
+        select(PptxQAJob)
+        .where(PptxQAJob.pres_id == pres_id)
+        .order_by(PptxQAJob.created_at.desc())
+    )
+    job = result.scalar_one_or_none()
+    if not job:
+        return {"status": "no_job", "issues_found": [], "pres_id": pres_id}
+    return {
+        "id": job.id,
+        "pres_id": job.pres_id,
+        "status": job.status,
+        "issues_found": json.loads(job.issues_found) if isinstance(job.issues_found, str) else job.issues_found,
+        "created_at": str(job.created_at),
+        "updated_at": str(job.updated_at),
+    }
+
+
 @router.get("/{project_id}/{pres_id}")
 async def get_slides(project_id: str, pres_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
@@ -352,13 +380,92 @@ async def download_pptx(project_id: str, pres_id: str, db: AsyncSession = Depend
     if not p:
         raise HTTPException(404)
     pres_dict = _pres_to_dict(p)
-    pptx_bytes = _build_pptx(pres_dict)
     safe_title = re.sub(r'[^\w\u4e00-\u9fff\-_]', '_', p.title)[:50]
+
+    # Try pptx-service first; fall back to local Python builder
+    pptx_bytes = await _build_pptx_via_service(pres_dict)
+    if pptx_bytes is None:
+        pptx_bytes = _build_pptx(pres_dict)
+
     return StreamingResponse(
         io.BytesIO(pptx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         headers={"Content-Disposition": f'attachment; filename="{safe_title}.pptx"'},
     )
+
+
+@router.get("/{project_id}/search-images")
+async def search_images(
+    project_id: str,
+    query: str,
+    per_page: int = 9,
+):
+    """Search Unsplash for images matching query. Requires UNSPLASH_ACCESS_KEY env var."""
+    import httpx
+    unsplash_key = os.environ.get("UNSPLASH_ACCESS_KEY", "")
+    if not unsplash_key:
+        logger.warning("UNSPLASH_ACCESS_KEY not set; returning empty results")
+        return {"results": [], "error": "UNSPLASH_ACCESS_KEY not configured"}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://api.unsplash.com/search/photos",
+                params={"query": query, "per_page": per_page, "orientation": "landscape"},
+                headers={"Authorization": f"Client-ID {unsplash_key}"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return {
+                    "results": [
+                        {
+                            "id": photo["id"],
+                            "url": photo["urls"]["regular"],
+                            "thumb": photo["urls"]["thumb"],
+                            "alt": photo.get("alt_description") or photo.get("description") or query,
+                            "author": photo["user"]["name"],
+                            "download_url": photo["links"]["download"],
+                        }
+                        for photo in data.get("results", [])
+                    ]
+                }
+            logger.warning(f"Unsplash API returned {resp.status_code}")
+    except Exception as e:
+        logger.error(f"Unsplash search error: {e}")
+
+    return {"results": []}
+
+
+# ── pptx-service Integration ──────────────────────────────
+
+async def _build_pptx_via_service(pres_dict: dict) -> Optional[bytes]:
+    """Try to generate PPTX via pptx-service. Returns None if service unavailable."""
+    import httpx
+
+    # Map template name to pptx-service theme
+    theme_map = {
+        "professional": "midnight_executive",
+        "modern": "ocean_gradient",
+        "minimal": "charcoal_minimal",
+    }
+    theme = theme_map.get(pres_dict.get("template", "professional"), "midnight_executive")
+
+    payload = {
+        "title": pres_dict.get("title", ""),
+        "slides": pres_dict.get("slides", []),
+        "theme": theme,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(f"{PPTX_SERVICE_URL}/generate", json=payload)
+            if resp.status_code == 200:
+                return resp.content
+            logger.warning(f"pptx-service returned {resp.status_code}")
+    except Exception as e:
+        logger.info(f"pptx-service unavailable, using local builder: {e}")
+
+    return None
 
 
 # ── File Summary Helper ────────────────────────────────────
@@ -782,10 +889,6 @@ def _slide_competitive_analysis(p, s, theme):
         cell.text_frame.paragraphs[0].font.size = Pt(13)
 
     # Data rows with color coding for ✅/❌/⚠️
-    green = (34, 197, 94)
-    red = (239, 68, 68)
-    yellow = (234, 179, 8)
-
     for i, row in enumerate(rows):
         bg_row = (
             (min(255, theme["bg"][0] + 15),
