@@ -29,7 +29,9 @@ class GenerateRequest(BaseModel):
     num_slides: int = 10
     template: str = "professional"
     extra_context: str = ""
-    file_ids: List[str] = []
+    context: Optional[str] = None
+    file_ids: Optional[List[str]] = []
+    slide_types: Optional[List[str]] = []
 
 
 class PresentationUpdateRequest(BaseModel):
@@ -38,6 +40,20 @@ class PresentationUpdateRequest(BaseModel):
     template: Optional[str] = None
     slides: Optional[List[Any]] = None
     topic: Optional[str] = None
+
+
+class SlideUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    content: Optional[Any] = None
+    notes: Optional[str] = None
+    type: Optional[str] = None
+    chart: Optional[Any] = None
+    table: Optional[Any] = None
+    flow: Optional[Any] = None
+    code: Optional[str] = None
+    table_data: Optional[Any] = None
+    chart_data: Optional[Any] = None
+    speaker_notes: Optional[str] = None
 
 
 # ── Templates ─────────────────────────────────────────
@@ -84,6 +100,7 @@ PROMPT_TMPL = """你是頂級的專業簡報設計師與數據分析師。請根
 主題：{topic}
 投影片數量：約 {num_slides} 張
 {extra}
+{slide_types_hint}
 
 要求：
 1. 自動分章節（每章節用 chapter 類型投影片開頭）
@@ -109,7 +126,12 @@ PROMPT_TMPL = """你是頂級的專業簡報設計師與數據分析師。請根
     {{"id":"8","type":"flowchart","title":"流程圖","flow":{{"nodes":[{{"id":"n1","label":"開始","type":"start"}},{{"id":"n2","label":"步驟一","type":"process"}},{{"id":"n3","label":"判斷？","type":"decision"}},{{"id":"n4","label":"步驟二","type":"process"}},{{"id":"n5","label":"完成","type":"end"}}],"connections":[{{"from_":"n1","to":"n2","label":""}},{{"from_":"n2","to":"n3","label":""}},{{"from_":"n3","to":"n4","label":"是"}},{{"from_":"n3","to":"n2","label":"否"}},{{"from_":"n4","to":"n5","label":""}}]}},"notes":"流程說明"}},
     {{"id":"9","type":"table","title":"數據總覽","table":{{"headers":["項目","數値","說明"],"rows":[["項目1","100","說明1"],["項目2","200","說明2"],["項目3","150","說明3"]]}},"notes":""}},
     {{"id":"10","type":"quote","title":"","quote":"這裡是最重要的核心洞見或關鍵引述，讓觀眾銘記於心。","author":"資料來源","notes":""}},
-    {{"id":"11","type":"summary","title":"總結","content":["核心要點一","核心要點二","核心要點三"],"cta":"立即行動","notes":""}}
+    {{"id":"11","type":"competitive_analysis","title":"競爭分析","table_data":{{"headers":["功能","我們","競爭者A","競爭者B"],"rows":[["功能1","✅","❌","⚠️"],["功能2","✅","✅","❌"]]}},"notes":""}},
+    {{"id":"12","type":"market_analysis","title":"市場分析","chart_data":{{"chart_type":"pie","labels":["我們","競爭者A","競爭者B","其他"],"datasets":[{{"label":"市占率","values":[35,28,22,15]}}]}},"notes":""}},
+    {{"id":"13","type":"literature_review","title":"文獻綜述","content":["Smith et al. (2023): 研究發現...","Jones (2022): 指出...","Chen & Wang (2021): 提出..."],"notes":""}},
+    {{"id":"14","type":"feasibility_study","title":"可行性評估","table_data":{{"headers":["面向","評分","說明"],"rows":[["技術可行性","9/10","說明"],["財務可行性","7/10","說明"],["市場可行性","8/10","說明"]]}},"notes":""}},
+    {{"id":"15","type":"code_result","title":"程式碼示範","code":"print('Hello World')\\n# 結果\\n> Hello World","notes":""}},
+    {{"id":"16","type":"summary","title":"總結","content":["核心要點一","核心要點二","核心要點三"],"cta":"立即行動","notes":""}}
   ]
 }}
 
@@ -142,19 +164,40 @@ async def generate_slides(
     if not project:
         raise HTTPException(404, "Project not found")
 
-    extra = f"額外背景資訊：{req.extra_context}" if req.extra_context else ""
+    # Build extra context: combine extra_context, context, and file summaries
+    extra_parts: list[str] = []
+    if req.extra_context:
+        extra_parts.append(req.extra_context)
+    if req.context:
+        extra_parts.append(req.context)
+
+    # If file_ids provided, fetch cross-file summaries using Gemini
+    if req.file_ids:
+        from ..db.models import File as FileModel
+        file_summary_text = await _summarize_files(req.file_ids, db)
+        if file_summary_text:
+            extra_parts.append(f"參考文件摘要：\n{file_summary_text}")
+
+    extra = "額外背景資訊：" + "\n".join(extra_parts) if extra_parts else ""
+
+    slide_types_hint = ""
+    if req.slide_types:
+        slide_types_hint = f"請優先使用以下投影片類型：{', '.join(req.slide_types)}"
+
     prompt = PROMPT_TMPL.format(
         topic=req.topic,
         num_slides=req.num_slides,
         extra=extra,
+        slide_types_hint=slide_types_hint,
     )
 
+    raw = ""
     try:
         raw = await generate_text(prompt)
         m = re.search(r'\{[\s\S]*\}', raw)
         data = json.loads(m.group() if m else raw)
     except Exception as e:
-        logger.error(f"AI generation error: {e}\nRaw: {raw[:500] if 'raw' in locals() else 'N/A'}")
+        logger.error(f"AI generation error: {e}\nRaw: {raw[:500] if raw else 'N/A'}")
         data = {
             "title": req.topic,
             "subtitle": "",
@@ -243,6 +286,40 @@ async def update_slides(
     return _pres_to_dict(p)
 
 
+@router.patch("/{project_id}/{pres_id}/slides/{slide_index}")
+async def update_slide(
+    project_id: str,
+    pres_id: str,
+    slide_index: int,
+    data: SlideUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update a single slide by index within a presentation."""
+    result = await db.execute(
+        select(Presentation).where(
+            Presentation.id == pres_id,
+            Presentation.project_id == project_id,
+        )
+    )
+    p = result.scalar_one_or_none()
+    if not p:
+        raise HTTPException(404, "Presentation not found")
+
+    slides = json.loads(p.slides) if isinstance(p.slides, str) else list(p.slides)
+    if slide_index < 0 or slide_index >= len(slides):
+        raise HTTPException(400, f"slide_index {slide_index} out of range (0-{len(slides)-1})")
+
+    slide = dict(slides[slide_index])
+    update_data = data.model_dump(exclude_none=True)
+    slide.update(update_data)
+    slides[slide_index] = slide
+
+    p.slides = json.dumps(slides, ensure_ascii=False)
+    await db.commit()
+    await db.refresh(p)
+    return {"slide_index": slide_index, "slide": slide}
+
+
 @router.delete("/{project_id}/{pres_id}")
 async def delete_slides(
     project_id: str,
@@ -283,6 +360,54 @@ async def download_pptx(project_id: str, pres_id: str, db: AsyncSession = Depend
     )
 
 
+# ── File Summary Helper ────────────────────────────────────
+
+async def _summarize_files(file_ids: List[str], db: AsyncSession) -> str:
+    from ..db.models import File as FileModel
+    from google import genai
+    import os
+
+    summaries: list[str] = []
+    gemini_uris: list[str] = []
+
+    result = await db.execute(
+        select(FileModel).where(FileModel.id.in_(file_ids))
+    )
+    files = result.scalars().all()
+
+    for f in files:
+        if f.gemini_file_uri:
+            gemini_uris.append(f.gemini_file_uri)
+        elif f.summary:
+            summaries.append(f"[{f.original_name}]\n{f.summary}")
+
+    # Try Gemini cross-file summary if we have URIs
+    if gemini_uris:
+        try:
+            client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
+            parts = []
+            for uri in gemini_uris:
+                parts.append({"file_data": {"file_uri": uri}})
+            parts.append({"text": "請用繁體中文為以上所有文件生成一份綜合摘要，提取關鍵資訊和主要論點，500字以內。"})
+
+            response = client.models.generate_content(
+                model="gemini-2.5-pro-exp-03-25",
+                contents=[{"parts": parts}],
+            )
+            return response.text
+        except Exception as e:
+            logger.warning(f"Gemini cross-file summary failed: {e}")
+
+    # Fallback: combine local summaries
+    if summaries:
+        combined = "\n\n".join(summaries)
+        return await generate_text(
+            f"請用繁體中文為以下文件摘要生成一份綜合摘要，500字以內：\n\n{combined[:3000]}"
+        )
+
+    return ""
+
+
 # ── PPTX Builder ──────────────────────────────────────────
 
 def _build_pptx(pres: dict) -> bytes:
@@ -297,17 +422,22 @@ def _build_pptx(pres: dict) -> bytes:
     p.slide_height = Inches(7.5)
 
     dispatch = {
-        "title":      _slide_title,
-        "chapter":    _slide_chapter,
-        "content":    _slide_content,
-        "two_column": _slide_two_col,
-        "bar_chart":  _slide_bar,
-        "line_chart": _slide_line,
-        "pie_chart":  _slide_pie,
-        "flowchart":  _slide_flow,
-        "table":      _slide_table,
-        "quote":      _slide_quote,
-        "summary":    _slide_summary,
+        "title":                _slide_title,
+        "chapter":              _slide_chapter,
+        "content":              _slide_content,
+        "two_column":           _slide_two_col,
+        "bar_chart":            _slide_bar,
+        "line_chart":           _slide_line,
+        "pie_chart":            _slide_pie,
+        "flowchart":            _slide_flow,
+        "table":                _slide_table,
+        "quote":                _slide_quote,
+        "summary":              _slide_summary,
+        "competitive_analysis": _slide_competitive_analysis,
+        "market_analysis":      _slide_market_analysis,
+        "literature_review":    _slide_literature_review,
+        "feasibility_study":    _slide_feasibility_study,
+        "code_result":          _slide_code_result,
     }
 
     for s in pres.get("slides", []):
@@ -612,3 +742,264 @@ def _slide_summary(p, s, theme):
         _txt(slide, 2.5, 6.3, 8.33, 0.85, f"→  {s['cta']}", 20, bold=True,
              color=(255,255,255), align="center")
 
+
+# ── New Slide Types ────────────────────────────────────────
+
+def _slide_competitive_analysis(p, s, theme):
+    """Competitive analysis: comparison table with color-coded cells."""
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+
+    slide = _blank(p)
+    _header(slide, s.get("title", "競爭分析"), theme)
+
+    # Support both legacy table_data and new table format
+    tbl_data = s.get("table_data") or s.get("table", {})
+    headers = tbl_data.get("headers", [])
+    rows = tbl_data.get("rows", [])
+    if not headers:
+        return
+
+    ncols = len(headers)
+    nrows = len(rows) + 1
+    row_h = min(0.6, 5.8 / nrows)
+
+    shape = slide.shapes.add_table(
+        nrows, ncols,
+        Inches(0.5), Inches(1.3), Inches(12.3), Inches(row_h * nrows)
+    )
+    t = shape.table
+
+    # Header row
+    for j, h in enumerate(headers):
+        cell = t.cell(0, j)
+        cell.text = h
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = RGBColor(*theme["accent"])
+        cell.text_frame.paragraphs[0].font.bold = True
+        cell.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+        cell.text_frame.paragraphs[0].font.size = Pt(13)
+
+    # Data rows with color coding for ✅/❌/⚠️
+    green = (34, 197, 94)
+    red = (239, 68, 68)
+    yellow = (234, 179, 8)
+
+    for i, row in enumerate(rows):
+        bg_row = (
+            (min(255, theme["bg"][0] + 15),
+             min(255, theme["bg"][1] + 15),
+             min(255, theme["bg"][2] + 25))
+            if i % 2 == 1 else None
+        )
+        for j, val in enumerate(row[:ncols]):
+            cell = t.cell(i + 1, j)
+            cell.text = str(val)
+            if bg_row and j == 0:
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor(*bg_row)
+            elif "✅" in str(val):
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor(20, 80, 40)
+            elif "❌" in str(val):
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor(80, 20, 20)
+            elif "⚠️" in str(val):
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor(80, 70, 10)
+            cell.text_frame.paragraphs[0].font.color.rgb = RGBColor(*theme["body_fg"])
+            cell.text_frame.paragraphs[0].font.size = Pt(12)
+
+
+def _slide_market_analysis(p, s, theme):
+    """Market analysis: pie or bar chart from chart_data."""
+    import matplotlib.pyplot as plt
+
+    slide = _blank(p)
+    _header(slide, s.get("title", "市場分析"), theme)
+
+    chart_data = s.get("chart_data") or s.get("chart", {})
+    chart_type = chart_data.get("chart_type", "pie")
+    labels = chart_data.get("labels", [])
+    datasets = chart_data.get("datasets", [])
+
+    if not labels or not datasets:
+        return
+
+    values = datasets[0].get("values", []) if datasets else []
+    if not values:
+        return
+
+    dark = theme.get("dark", True)
+    bg = tuple(c / 255 for c in theme["bg"])
+    fg = "white" if dark else "#1a1a2e"
+    colors = [CHART_PALETTE[i % len(CHART_PALETTE)] for i in range(len(labels))]
+
+    fig, ax = plt.subplots(figsize=(9, 5.0))
+    fig.patch.set_facecolor(bg)
+    ax.set_facecolor(bg)
+
+    if chart_type == "pie":
+        wedges, texts, autotexts = ax.pie(
+            values, labels=labels, autopct="%1.1f%%", colors=colors,
+            startangle=90, wedgeprops={"edgecolor": bg, "linewidth": 2},
+            textprops={"color": fg, "fontsize": 11},
+        )
+        for at in autotexts:
+            at.set_color("white")
+            at.set_fontweight("bold")
+    else:
+        bars = ax.bar(labels, values, color=colors, width=0.6)
+        for bar, val in zip(bars, values):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max(values) * 0.01,
+                str(val), ha="center", va="bottom", color=fg, fontsize=9,
+            )
+        ax.tick_params(colors=fg)
+        ax.spines[["top", "right", "left"]].set_visible(False)
+        ax.spines["bottom"].set_color(fg)
+        ax.grid(axis="y", alpha=0.15, color=fg)
+
+    plt.tight_layout()
+    img = _chart_img(fig, bg)
+    from pptx.util import Inches
+    slide.shapes.add_picture(img, Inches(1.8), Inches(1.3), Inches(9.6), Inches(5.8))
+
+
+def _slide_literature_review(p, s, theme):
+    """Literature review: numbered citation list."""
+    slide = _blank(p)
+    _header(slide, s.get("title", "文獻綜述"), theme)
+
+    items = s.get("content", [])
+    if not items:
+        return
+
+    accent2 = tuple(min(255, c + 80) for c in theme["accent"])
+    n = len(items)
+    step = min(0.95, 5.8 / max(n, 1))
+    y0 = 1.4
+
+    for i, item in enumerate(items[:6]):
+        y = y0 + i * step
+        # Citation number badge
+        _rect(slide, 0.35, y + 0.05, 0.5, 0.55, fill=theme["accent"])
+        _txt(slide, 0.35, y + 0.05, 0.5, 0.55, str(i + 1), 14, bold=True,
+             color=(255, 255, 255), align="center")
+        # Citation text
+        _txt(slide, 1.05, y, 12.0, 0.8, str(item), 15, italic=True,
+             color=theme["body_fg"])
+        # Separator line
+        if i < n - 1:
+            _rect(slide, 0.35, y + step - 0.08, 12.63, 0.02,
+                  fill=tuple(min(255, c + 30) for c in theme["bg"]))
+
+
+def _slide_feasibility_study(p, s, theme):
+    """Feasibility study: three-column scoring matrix."""
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+
+    slide = _blank(p)
+    _header(slide, s.get("title", "可行性評估"), theme)
+
+    tbl_data = s.get("table_data") or s.get("table", {})
+    headers = tbl_data.get("headers", ["面向", "評分", "說明"])
+    rows = tbl_data.get("rows", [])
+    if not rows:
+        return
+
+    ncols = len(headers)
+    nrows = len(rows) + 1
+    row_h = min(0.7, 5.8 / nrows)
+
+    shape = slide.shapes.add_table(
+        nrows, ncols,
+        Inches(0.6), Inches(1.3), Inches(12.13), Inches(row_h * nrows)
+    )
+    t = shape.table
+
+    # Header
+    for j, h in enumerate(headers):
+        cell = t.cell(0, j)
+        cell.text = h
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = RGBColor(*theme["accent"])
+        cell.text_frame.paragraphs[0].font.bold = True
+        cell.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+        cell.text_frame.paragraphs[0].font.size = Pt(13)
+
+    # Score rows with gradient coloring based on score value
+    for i, row in enumerate(rows):
+        for j, val in enumerate(row[:ncols]):
+            cell = t.cell(i + 1, j)
+            cell.text = str(val)
+
+            # Color score column based on value
+            if j == 1:
+                score_str = str(val).split("/")[0].strip()
+                try:
+                    score = float(score_str)
+                    max_score = 10.0
+                    ratio = score / max_score
+                    if ratio >= 0.8:
+                        cell.fill.solid()
+                        cell.fill.fore_color.rgb = RGBColor(20, 80, 40)
+                    elif ratio >= 0.6:
+                        cell.fill.solid()
+                        cell.fill.fore_color.rgb = RGBColor(60, 80, 20)
+                    else:
+                        cell.fill.solid()
+                        cell.fill.fore_color.rgb = RGBColor(80, 50, 10)
+                except ValueError:
+                    pass
+
+            cell.text_frame.paragraphs[0].font.color.rgb = RGBColor(*theme["body_fg"])
+            cell.text_frame.paragraphs[0].font.size = Pt(13)
+
+
+def _slide_code_result(p, s, theme):
+    """Code result slide: dark code block with monospace styling."""
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN
+
+    slide = _blank(p)
+    _header(slide, s.get("title", "程式碼"), theme)
+
+    code = s.get("code", "")
+    if not code:
+        return
+
+    # Dark code background panel
+    code_bg = (18, 18, 36) if theme.get("dark") else (30, 30, 50)
+    _rect(slide, 0.4, 1.3, 12.53, 5.9, fill=code_bg)
+
+    # Language tag
+    _rect(slide, 0.4, 1.3, 1.5, 0.35, fill=theme["accent"])
+    _txt(slide, 0.4, 1.3, 1.5, 0.35, "CODE", 10, bold=True,
+         color=(255, 255, 255), align="center")
+
+    # Code text with monospace-like styling
+    tb = slide.shapes.add_textbox(
+        Inches(0.6), Inches(1.75), Inches(12.13), Inches(5.2)
+    )
+    tf = tb.text_frame
+    tf.word_wrap = True
+
+    lines = code.split("\n")
+    first = True
+    for line in lines:
+        if first:
+            par = tf.paragraphs[0]
+            first = False
+        else:
+            par = tf.add_paragraph()
+
+        run = par.add_run()
+        run.text = line if line else " "
+        run.font.size = Pt(13)
+        run.font.color.rgb = RGBColor(180, 220, 255)
+        # Note: true monospace requires font name set; using a safe fallback
+        run.font.name = "Courier New"
