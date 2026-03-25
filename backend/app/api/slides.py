@@ -437,6 +437,34 @@ async def download_pptx(project_id: str, pres_id: str, db: AsyncSession = Depend
 
 # ── File Summary Helper ────────────────────────────────────
 
+
+@router.get("/{project_id}/{pres_id}/qa-status")
+async def get_qa_status(
+    project_id: str,
+    pres_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get QA job status for a presentation."""
+    from ..db.models import PptxQAJob
+    result = await db.execute(
+        select(PptxQAJob)
+        .where(PptxQAJob.pres_id == pres_id)
+        .order_by(PptxQAJob.created_at.desc())
+    )
+    job = result.scalar_one_or_none()
+    if not job:
+        return {"pres_id": pres_id, "status": "no_job", "issues_found": []}
+    import json as _json
+    return {
+        "pres_id": pres_id,
+        "job_id": job.id,
+        "status": job.status,
+        "issues_found": _json.loads(job.issues_found) if job.issues_found else [],
+        "created_at": str(job.created_at),
+        "updated_at": str(job.updated_at),
+    }
+
+
 async def _summarize_files(file_ids: List[str], db: AsyncSession) -> str:
     from ..db.models import File as FileModel
     from google import genai
