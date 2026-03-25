@@ -19,26 +19,31 @@ const FONT_PAIRS = [
   { title: 'Arial Black', body: 'Arial' },
 ]
 
+function isValidImageUrl(url) {
+  if (!url || typeof url !== 'string') return false
+  return url.startsWith('https://') && url.length < 2048
+}
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }))
 
 app.post('/generate', async (req, res) => {
   try {
     const { slides, theme = 'midnight_executive', font_pair = 0, title = 'Presentation' } = req.body
-    
+
     const palette = PALETTES[theme] || PALETTES.midnight_executive
     const fonts = FONT_PAIRS[font_pair % FONT_PAIRS.length]
-    
+
     const prs = new PptxGenJS()
     prs.layout = 'LAYOUT_16x9'
     prs.title = title
-    
+
     for (const slide of slides) {
       const s = prs.addSlide()
-      
+
       // Background
       const bgColor = slide.is_dark ? palette.primary : 'FFFFFF'
       s.background = { color: bgColor }
-      
+
       // Render elements
       for (const el of (slide.elements || [])) {
         if (el.type === 'text') {
@@ -72,7 +77,7 @@ app.post('/generate', async (req, res) => {
             fill: { color: el.fill_color || palette.accent },
             line: { color: el.line_color || palette.primary, pt: el.line_pt || 0 },
           })
-        } else if (el.type === 'image' && el.image_url) {
+        } else if (el.type === 'image' && el.image_url && isValidImageUrl(el.image_url)) {
           try {
             s.addImage({ path: el.image_url, x: el.x, y: el.y, w: el.w, h: el.h })
           } catch (e) {
@@ -81,12 +86,12 @@ app.post('/generate', async (req, res) => {
         }
       }
     }
-    
+
     const buffer = await prs.stream()
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')
     res.setHeader('Content-Disposition', `attachment; filename="${title}.pptx"`)
     res.send(Buffer.from(buffer))
-    
+
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: err.message })
