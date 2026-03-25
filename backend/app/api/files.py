@@ -26,6 +26,17 @@ ALLOWED_TYPES = {
     "image/webp": "image",
 }
 
+# MIME types not supported by Gemini File API
+GEMINI_UNSUPPORTED_MIME = (
+    "presentationml",    # .pptx
+    "spreadsheetml",     # .xlsx
+    "vnd.ms-powerpoint", # .ppt
+    "vnd.ms-excel",      # .xls
+)
+
+def is_gemini_supported(mime_type: str) -> bool:
+    return not any(t in mime_type for t in GEMINI_UNSUPPORTED_MIME)
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
@@ -336,24 +347,27 @@ async def _process_file_background(file_id: str, local_path: str, mime_type: str
             if not f:
                 return
 
-            gemini_uri = None
+            gemini_file = None
             summary = ""
 
-            try:
-                gemini_uri = await upload_file_to_gemini(local_path, mime_type, display_name)
-            except Exception as e:
-                logger.warning(f"Gemini upload failed: {e}")
+            # Bug 2 fix: skip Gemini File API for unsupported MIME types (e.g. PPTX, XLSX)
+            if is_gemini_supported(mime_type):
+                try:
+                    gemini_file = await upload_file_to_gemini(local_path, mime_type, display_name)
+                except Exception as e:
+                    logger.warning(f"Gemini upload failed: {e}")
 
             try:
-                if gemini_uri:
-                    summary = await generate_file_summary(gemini_uri, display_name)
+                if gemini_file:
+                    summary = await generate_file_summary(gemini_file, display_name)
                 else:
                     summary = await _generate_summary_from_local(local_path, mime_type, display_name)
             except Exception as e:
                 logger.warning(f"Summary failed: {e}")
                 summary = f"檔案 {display_name} 已上傳。"
 
-            f.gemini_file_uri = gemini_uri
+            # Bug 1 fix: store URI string, not the File object
+            f.gemini_file_uri = gemini_file.uri if gemini_file else ""
             f.summary = summary
             f.is_indexed = True
             await db.commit()
