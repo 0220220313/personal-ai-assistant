@@ -18,6 +18,9 @@ from sqlalchemy import select
 from ..db.database import get_db
 from ..db.models import Project, Presentation
 from ..core.gemini import generate_text
+from ..core.unsplash import search_image
+import httpx
+import os
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/slides", tags=["slides"])
@@ -137,6 +140,37 @@ PROMPT_TMPL = """你是頂級的專業簡報設計師與數據分析師。請根
 
 根據主題靈活調整，不必每種類型都用，選最適合的組合。"""
 
+
+
+# ── SPEC-004 v2.0 Element-Based Slide Prompt ─────────────────────────────
+
+SLIDE_JSON_PROMPT = """
+根據以下主題和資料，生成 {num_slides} 張投影片的 JSON。
+主題：{topic}
+{extra}
+規則：
+- 每張使用不同 layout（title/two_column/stat_callout/table/timeline/competitive）
+- 必須有視覺元素（表格、統計數字、圖片位置）
+- 標題36pt，內文14-16pt
+- 禁止標題下方裝飾線
+
+輸出格式（JSON only，無其他文字）：
+{{
+  "theme": "midnight_executive",
+  "title": "簡報標題",
+  "subtitle": "副標題",
+  "slides": [
+    {{
+      "is_dark": true,
+      "elements": [
+        {{"type": "text", "text": "標題", "x": 0.5, "y": 2.5, "w": 9, "h": 1.5, "fontSize": 44, "bold": true, "is_title": true, "align": "center"}},
+        {{"type": "text", "text": "副標題", "x": 0.5, "y": 4.2, "w": 9, "h": 0.8, "fontSize": 20, "align": "center"}}
+      ]
+    }}
+  ]
+}}
+"""
+
 # ── Helper ────────────────────────────────────────────
 
 def _pres_to_dict(p: Presentation) -> dict:
@@ -206,18 +240,59 @@ async def generate_slides(
             ],
         }
 
+    slides_data = data.get("slides", [])
+
+    # Fetch Unsplash images for each slide (best-effort)
+    for slide in slides_data:
+        title_text = req.topic
+        for el in slide.get("elements", []):
+            if el.get("is_title") and el.get("text"):
+                title_text = el["text"]
+                break
+        img_url = await search_image(title_text)
+        if img_url:
+            if "elements" not in slide:
+                slide["elements"] = []
+            slide["elements"].append({
+                "type": "image",
+                "image_url": img_url,
+                "x": 0.1, "y": 0.1, "w": 2.5, "h": 1.5,
+            })
+
     pres = Presentation(
         project_id=project_id,
         topic=req.topic,
         template=req.template,
         title=data.get("title", req.topic),
         subtitle=data.get("subtitle", ""),
-        slides=json.dumps(data.get("slides", []), ensure_ascii=False),
+        slides=json.dumps(slides_data, ensure_ascii=False),
     )
     db.add(pres)
     await db.commit()
     await db.refresh(pres)
-    return _pres_to_dict(pres)
+
+    # Call pptx-service to generate PPTX file (best-effort)
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                "http://pptx-service:3001/generate",
+                json={
+                    "slides": slides_data,
+                    "theme": data.get("theme", "midnight_executive"),
+                    "title": pres.title,
+                },
+            )
+        if r.status_code == 200:
+            os.makedirs("/app/data/pptx", exist_ok=True)
+            with open(f"/app/data/pptx/{pres.id}.pptx", "wb") as f:
+                f.write(r.content)
+            logger.info(f"pptx-service generated PPTX for pres {pres.id}")
+    except Exception as e:
+        logger.warning(f"pptx-service unavailable: {e}")
+
+    result = _pres_to_dict(pres)
+    result["download_url"] = f"/api/slides/{project_id}/{pres.id}/download"
+    return result
 
 
 @router.get("/{project_id}")
