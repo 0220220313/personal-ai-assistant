@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Backgro
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-import os, aiofiles, uuid, mimetypes, asyncio, logging
+import os, aiofiles, uuid, mimetypes, asyncio, logging, subprocess, tempfile
 from typing import Optional
 
 from ..db.database import get_db
@@ -142,6 +142,61 @@ async def upload_file(
     }
 
 
+@router.post("/{file_id}/parse-pptx")
+async def parse_pptx(file_id: str, db: AsyncSession = Depends(get_db)):
+    """Parse a PPTX file and extract structured content with optional Gemini vision analysis."""
+    result = await db.execute(select(FileModel).where(FileModel.id == file_id))
+    f = result.scalar_one_or_none()
+    if not f:
+        raise HTTPException(404, "File not found")
+    if f.file_type != "pptx":
+        raise HTTPException(400, "File is not a PPTX")
+
+    local_path = os.path.join(UPLOAD_DIR, f.filename)
+    if not os.path.exists(local_path):
+        raise HTTPException(404, "File not found on disk")
+
+    # Step 1: Parse PPTX with python-pptx
+    parse_result = _parse_pptx_to_markdown(local_path)
+    slides_md = parse_result["slides_markdown"]
+    visual_slide_indices = parse_result["visual_slide_indices"]
+
+    # Step 2: Try LibreOffice screenshot (optional)
+    visual_notes: list[str] = []
+    has_visual_slides = len(visual_slide_indices) > 0
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        image_paths = _pptx_to_images(local_path, tmp_dir)
+
+        # Step 3: If screenshots available, send to Gemini Vision
+        if image_paths and visual_slide_indices:
+            from ..core.gemini import generate_text_with_images
+            for idx in visual_slide_indices:
+                if idx < len(image_paths):
+                    try:
+                        note = await _describe_slide_image(image_paths[idx], idx)
+                        visual_notes.append(note)
+                    except Exception as e:
+                        logger.warning(f"Gemini vision failed for slide {idx}: {e}")
+
+    # Step 4: Merge results into full content
+    full_content = "\n\n---\n\n".join(slides_md)
+    if visual_notes:
+        full_content += "\n\n## Visual Notes\n\n" + "\n\n".join(visual_notes)
+
+    # Step 5: Save to File.summary
+    f.summary = full_content
+    f.is_indexed = True
+    await db.commit()
+
+    return {
+        "slide_count": len(slides_md),
+        "parsed_content": full_content,
+        "has_visual_slides": has_visual_slides,
+        "visual_notes": visual_notes,
+    }
+
+
 @router.patch("/{file_id}/move")
 async def move_file(
     file_id: str,
@@ -171,6 +226,92 @@ async def delete_file(file_id: str, db: AsyncSession = Depends(get_db)):
     return {"ok": True}
 
 
+# ── PPTX Parsing Helpers ──────────────────────────────────
+
+def _parse_pptx_to_markdown(pptx_path: str) -> dict:
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    prs = Presentation(pptx_path)
+    slides_md: list[str] = []
+    visual_slides: list[int] = []
+
+    for i, slide in enumerate(prs.slides):
+        lines: list[str] = []
+        title = ""
+        has_image = False
+
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    text = para.text.strip()
+                    if text:
+                        if not title:
+                            title = text
+                            lines.append(f"# Slide {i+1}: {text}")
+                        else:
+                            lines.append(f"- {text}")
+            if shape.has_table:
+                table = shape.table
+                headers = [cell.text for cell in table.rows[0].cells]
+                lines.append("| " + " | ".join(headers) + " |")
+                lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+                for row in table.rows[1:]:
+                    lines.append("| " + " | ".join([cell.text for cell in row.cells]) + " |")
+            if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                has_image = True
+            if shape.has_chart:
+                chart = shape.chart
+                lines.append(f"[Chart: {chart.chart_type}]")
+                for series in chart.series:
+                    values = [str(v) for v in series.values]
+                    lines.append(f"- {series.name}: {', '.join(values)}")
+
+        if has_image:
+            visual_slides.append(i)
+        slides_md.append("\n".join(lines))
+
+    return {
+        "slides_markdown": slides_md,
+        "visual_slide_indices": visual_slides,
+    }
+
+
+def _pptx_to_images(pptx_path: str, output_dir: str) -> list[str]:
+    try:
+        result = subprocess.run(
+            ["libreoffice", "--headless", "--convert-to", "png",
+             "--outdir", output_dir, pptx_path],
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return sorted([
+                os.path.join(output_dir, f)
+                for f in os.listdir(output_dir)
+                if f.endswith(".png")
+            ])
+    except Exception:
+        pass
+    return []
+
+
+async def _describe_slide_image(image_path: str, slide_index: int) -> str:
+    from ..core.gemini import generate_text
+    import base64
+
+    with open(image_path, "rb") as img_file:
+        image_data = base64.b64encode(img_file.read()).decode()
+
+    prompt = (
+        f"請描述這張投影片（第 {slide_index + 1} 頁）的視覺內容，"
+        "包括圖片、圖表、圖形等非文字元素的內容和含義。請用繁體中文回答，100字以內。"
+    )
+    return await generate_text(f"{prompt}\n[image/png base64: {image_data[:100]}...]")
+
+
+# ── Background Processing ──────────────────────────────────
+
 async def _process_file_background(file_id: str, local_path: str, mime_type: str, display_name: str):
     from ..db.database import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
@@ -195,7 +336,7 @@ async def _process_file_background(file_id: str, local_path: str, mime_type: str
                     summary = await _generate_summary_from_local(local_path, mime_type, display_name)
             except Exception as e:
                 logger.warning(f"Summary failed: {e}")
-                summary = f"\u6a94\u6848 {display_name} \u5df2\u4e0a\u50b3\u3002"
+                summary = f"檔案 {display_name} 已上傳。"
 
             f.gemini_file_uri = gemini_uri
             f.summary = summary
@@ -208,7 +349,7 @@ async def _process_file_background(file_id: str, local_path: str, mime_type: str
                 result = await db.execute(select(FileModel).where(FileModel.id == file_id))
                 f = result.scalar_one_or_none()
                 if f:
-                    f.summary = "\u8655\u7406\u5931\u6557\uff0c\u8acb\u91cd\u65b0\u4e0a\u50b3"
+                    f.summary = "處理失敗，請重新上傳"
                     f.is_indexed = True
                     await db.commit()
             except Exception:
@@ -237,17 +378,17 @@ async def _generate_summary_from_local(local_path: str, mime_type: str, display_
                     if hasattr(shape, "text") and shape.text.strip():
                         slide_lines.append(shape.text.strip())
                 if slide_lines:
-                    slides_text.append(f"\u7b2c{i+1}\u9801: " + " | ".join(slide_lines))
+                    slides_text.append(f"第{i+1}頁: " + " | ".join(slide_lines))
             text = "\n".join(slides_text)
         elif mime_type in ("text/plain", "text/markdown"):
             async with aiofiles.open(local_path, "r", encoding="utf-8", errors="ignore") as f:
                 text = await f.read()
             text = text[:3000]
     except Exception:
-        return f"\u6a94\u6848 {display_name} \u5df2\u4e0a\u50b3\u81f3\u77e5\u8b58\u5eab\u3002"
+        return f"檔案 {display_name} 已上傳至知識庫。"
 
     if not text.strip():
-        return f"\u6a94\u6848 {display_name} \u5167\u5bb9\u70ba\u7a7a\u6216\u7121\u6cd5\u8b80\u53d6\u3002"
+        return f"檔案 {display_name} 內容為空或無法讀取。"
 
-    prompt = f"\u8acb\u7528\u7e41\u9ad4\u4e2d\u6587\u70ba\u4ee5\u4e0b\u6587\u4ef6\u751f\u6210\u6458\u8981\uff08200\u5b57\u4ee5\u5167\uff09\uff1a\n\n{text[:2000]}"
+    prompt = f"請用繁體中文為以下文件生成摘要（200字以內）：\n\n{text[:2000]}"
     return await generate_text(prompt)
