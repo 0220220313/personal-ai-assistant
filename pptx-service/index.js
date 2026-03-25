@@ -19,9 +19,21 @@ const FONT_PAIRS = [
   { title: 'Arial Black', body: 'Arial' },
 ]
 
+const ALLOWED_IMAGE_DOMAINS = [
+  'images.unsplash.com',
+  'source.unsplash.com',
+  'plus.unsplash.com',
+]
+
 function isValidImageUrl(url) {
   if (!url || typeof url !== 'string') return false
-  return url.startsWith('https://') && url.length < 2048
+  if (!url.startsWith('https://') || url.length >= 2048) return false
+  try {
+    const parsed = new URL(url)
+    return ALLOWED_IMAGE_DOMAINS.includes(parsed.hostname)
+  } catch {
+    return false
+  }
 }
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }))
