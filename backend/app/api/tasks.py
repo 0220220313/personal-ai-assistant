@@ -18,6 +18,7 @@ class TaskCreate(BaseModel):
     assignee: str = ""
     due_date: str = ""
     status: str = "todo"
+    is_milestone: bool = False
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
@@ -26,6 +27,7 @@ class TaskUpdate(BaseModel):
     priority: Optional[str] = None
     assignee: Optional[str] = None
     due_date: Optional[str] = None
+    is_milestone: Optional[bool] = None
 
 class AIGenerateRequest(BaseModel):
     text: str   # 要讓 AI 分析的文字
@@ -47,6 +49,7 @@ async def list_tasks(project_id: str, db: AsyncSession = Depends(get_db)):
             "priority": t.priority,
             "assignee": t.assignee,
             "due_date": t.due_date,
+            "is_milestone": t.is_milestone,
             "source_msg": t.source_msg,
             "created_at": str(t.created_at),
             "updated_at": str(t.updated_at),
@@ -72,11 +75,12 @@ async def create_task(
         assignee=body.assignee,
         due_date=body.due_date,
         status=body.status,
+        is_milestone=body.is_milestone,
     )
     db.add(task)
     await db.commit()
     await db.refresh(task)
-    return {"id": task.id, "title": task.title, "status": task.status}
+    return {"id": task.id, "title": task.title, "status": task.status, "is_milestone": task.is_milestone}
 
 @router.patch("/{task_id}")
 async def update_task(
@@ -89,12 +93,13 @@ async def update_task(
     if not task:
         raise HTTPException(status_code=404, detail="任務不存在")
 
-    if body.title is not None:       task.title = body.title
-    if body.description is not None: task.description = body.description
-    if body.status is not None:      task.status = body.status
-    if body.priority is not None:    task.priority = body.priority
-    if body.assignee is not None:    task.assignee = body.assignee
-    if body.due_date is not None:    task.due_date = body.due_date
+    if body.title is not None:        task.title = body.title
+    if body.description is not None:  task.description = body.description
+    if body.status is not None:       task.status = body.status
+    if body.priority is not None:     task.priority = body.priority
+    if body.assignee is not None:     task.assignee = body.assignee
+    if body.due_date is not None:     task.due_date = body.due_date
+    if body.is_milestone is not None: task.is_milestone = body.is_milestone
 
     await db.commit()
     return {"success": True}
