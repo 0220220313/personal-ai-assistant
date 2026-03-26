@@ -106,13 +106,19 @@ export default function TasksPage() {
 
                 <div className="space-y-2 min-h-[100px]">
                   {colTasks.map(task => (
-                    <div key={task.id} className="bg-gray-800 border border-gray-700 rounded-lg p-3 group">
+                    <div key={task.id} className={`bg-gray-800 border rounded-lg p-3 group ${task.is_milestone ? "border-yellow-500/50" : "border-gray-700"}`}>
+                      {task.is_milestone && <span className="text-xs text-yellow-400 mb-1 inline-flex items-center gap-1">🏁 里程碑</span>}
                       <div className="flex items-start justify-between gap-2">
                         <p className="text-sm text-white leading-snug">{task.title}</p>
-                        <button onClick={() => deleteTask(task.id)}
-                          className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-all shrink-0">
-                          <Trash2 size={13} />
-                        </button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button onClick={() => { tasksApi.update(task.id, { is_milestone: !task.is_milestone }).then(loadTasks); }}
+                            className={`text-xs px-2 py-0.5 rounded ${task.is_milestone ? "text-yellow-400 bg-yellow-900/30" : "text-gray-600 hover:text-gray-400"}`}
+                            title="切換里程碑">🏁</button>
+                          <button onClick={() => deleteTask(task.id)}
+                            className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-all">
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
                       </div>
                       {task.description && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{task.description}</p>}
                       <div className="flex items-center justify-between mt-2">
