@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
 from pydantic import BaseModel
 from typing import Optional
-from datetime import date
+from datetime import date, datetime, timedelta
 import json
 
 from ..db.database import get_db
@@ -88,6 +88,48 @@ async def create_project(
         "color": project.color,
         "is_archived": project.is_archived,
         "created_at": str(project.created_at),
+    }
+
+@router.get("/{project_id}/progress")
+async def get_project_progress(project_id: str, db: AsyncSession = Depends(get_db)):
+    proj_r = await db.execute(select(Project).where(Project.id == project_id))
+    if not proj_r.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="專案不存在")
+
+    tasks_r = await db.execute(select(Task).where(Task.project_id == project_id))
+    tasks = tasks_r.scalars().all()
+
+    total = len(tasks)
+    by_status = {"todo": 0, "in_progress": 0, "done": 0, "archived": 0}
+    for t in tasks:
+        if t.status in by_status:
+            by_status[t.status] += 1
+
+    completion_rate = by_status["done"] / total if total > 0 else 0.0
+
+    # This-week stats: Mon to today
+    today = date.today()
+    week_start = today - timedelta(days=today.weekday())
+    week_start_str = week_start.isoformat()
+    today_str = today.isoformat()
+
+    this_week_created = sum(
+        1 for t in tasks
+        if t.created_at and str(t.created_at)[:10] >= week_start_str
+    )
+    this_week_completed = sum(
+        1 for t in tasks
+        if t.status == "done" and t.updated_at and str(t.updated_at)[:10] >= week_start_str
+    )
+
+    return {
+        "total": total,
+        "completion_rate": round(completion_rate, 4),
+        "by_status": by_status,
+        "this_week": {
+            "created": this_week_created,
+            "completed": this_week_completed,
+        },
     }
 
 @router.get("/{project_id}")
