@@ -136,6 +136,7 @@ export interface Task {
   priority: "high" | "medium" | "low";
   assignee: string; due_date: string;
   source_msg: string; created_at: string; updated_at: string;
+  is_milestone?: boolean;
 }
 
 export interface Report {
@@ -184,3 +185,24 @@ export interface SSEActionEvent {
 }
 export interface SSEDoneEvent { type: "done"; message_id: string; }
 export type SSEEvent = SSETextEvent | SSEActionEvent | SSEDoneEvent;
+
+export interface ProgressData {
+  completion_rate: number;
+  total: number;
+  by_status: { todo: number; in_progress: number; done: number; archived: number };
+  this_week: { created: number; completed: number };
+}
+export interface NotifSettings {
+  project_id: string;
+  summary_schedule: "daily" | "weekly" | "off";
+}
+export const progressApi = {
+  get: (projectId: string) => api<ProgressData>(`/api/projects/${projectId}/progress`),
+};
+export const notificationsApi = {
+  getSettings: (projectId: string) => api<NotifSettings>(`/api/notifications/settings/${projectId}`),
+  updateSettings: (projectId: string, data: Partial<NotifSettings>) =>
+    api<NotifSettings>(`/api/notifications/settings/${projectId}`, { method: "PATCH", body: JSON.stringify(data) }),
+  triggerSummary: (projectId: string) =>
+    api<{ message: string }>(`/api/notifications/summary/${projectId}`, { method: "POST" }),
+};
