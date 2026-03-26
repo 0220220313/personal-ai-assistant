@@ -25,6 +25,7 @@
     "@dnd-kit/sortable": "^8.0.0",
     "date-fns": "^3.6.0",
     "react-dropzone": "^14.2.0",
-    "next-pwa": "^5.6.0"
+    "next-pwa": "^5.6.0",
+    "recharts": "^2.12.0"
   }
 }
