@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
-from typing import Optional
+from typing import Literal, Optional
 from datetime import date
 import os
 
@@ -18,7 +18,7 @@ router = APIRouter(tags=["notifications"])
 
 # ── Schemas ──────────────────────────────────────────
 class NotificationSettingUpdate(BaseModel):
-    summary_schedule: str  # "daily" | "weekly" | "off"
+    summary_schedule: Literal["daily", "weekly", "off"]
 
 
 # ── Routes ───────────────────────────────────────────

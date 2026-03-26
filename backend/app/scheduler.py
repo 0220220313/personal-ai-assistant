@@ -156,6 +156,65 @@ async def _notify_project(
         await send_web_push(sub, message)
 
 
+async def check_milestone_completions() -> None:
+    """每小時執行：偵測剛完成的 milestone 任務並發送通知"""
+    logger.info("🏁 開始檢查 milestone 完成狀態...")
+    async with AsyncSessionLocal() as db:
+        try:
+            await _process_milestone_completions(db)
+        except Exception as exc:
+            logger.error("check_milestone_completions 發生錯誤: %s", exc)
+
+
+async def _process_milestone_completions(db: AsyncSession) -> None:
+    today_str = date.today().isoformat()
+
+    # 查詢所有 is_milestone=True 且 status=done 的任務
+    result = await db.execute(
+        select(Task).where(
+            Task.is_milestone == True,
+            Task.status == "done",
+        )
+    )
+    milestones: list[Task] = list(result.scalars().all())
+
+    if not milestones:
+        logger.info("✅ 無已完成的 milestone")
+        return
+
+    for task in milestones:
+        # 避免重複通知：檢查今日是否已有 milestone 通知
+        log_result = await db.execute(
+            select(NotificationLog).where(
+                NotificationLog.project_id == task.project_id,
+                NotificationLog.task_id == task.id,
+                NotificationLog.notification_type == "milestone",
+                NotificationLog.sent_date == today_str,
+            )
+        )
+        if log_result.scalar_one_or_none():
+            continue
+
+        message = f"🏁 Milestone 完成：{task.title}"
+        logger.info("📬 %s (project=%s)", message, task.project_id)
+
+        # 寫入通知記錄
+        log_entry = NotificationLog(
+            project_id=task.project_id,
+            task_id=task.id,
+            notification_type="milestone",
+            sent_date=today_str,
+        )
+        db.add(log_entry)
+
+        # 發送 Web Push
+        subs_result = await db.execute(select(PushSubscription))
+        for sub in subs_result.scalars().all():
+            await send_web_push(sub, message)
+
+    await db.commit()
+
+
 def start_scheduler() -> None:
     """啟動排程器"""
     scheduler.add_job(
@@ -166,8 +225,16 @@ def start_scheduler() -> None:
         replace_existing=True,
         max_instances=1,
     )
+    scheduler.add_job(
+        check_milestone_completions,
+        trigger="interval",
+        hours=1,
+        id="check_milestone_completions",
+        replace_existing=True,
+        max_instances=1,
+    )
     scheduler.start()
-    logger.info("✅ APScheduler 已啟動（每小時檢查逾期任務）")
+    logger.info("✅ APScheduler 已啟動（每小時檢查逾期任務 + milestone 完成）")
 
 
 def stop_scheduler() -> None:

@@ -108,7 +108,7 @@ export const slidesApi = {
 export interface Project {
   id: string; name: string; description: string;
   tags: string[]; color: string; is_archived: boolean;
-  tasks_count?: number; files_count?: number;
+  tasks_count?: number; files_count?: number; overdue_count?: number;
   created_at: string; updated_at: string;
 }
 
